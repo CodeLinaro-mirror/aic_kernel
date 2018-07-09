@@ -1293,10 +1293,16 @@ struct mhi_device *mhi_alloc_device(struct mhi_controller *mhi_cntrl)
 
 static int __init mhi_init(void)
 {
+	int ret;
+
 	/* parent directory */
 	debugfs_create_dir(mhi_bus_type.name, NULL);
 
-	return bus_register(&mhi_bus_type);
+	ret = bus_register(&mhi_bus_type);
+
+	if (!ret)
+		mhi_dtr_init();
+	return ret;
 }
 postcore_initcall(mhi_init);
 
