@@ -12,6 +12,7 @@ struct mhi_ctxt;
 struct mhi_cmd;
 struct image_info;
 struct bhi_vec_entry;
+struct mhi_timesync;
 struct mhi_buf_info;
 
 /**
@@ -203,6 +204,7 @@ struct mhi_controller {
 	void (*wake_put)(struct mhi_controller *mhi_cntrl, bool override);
 	int (*runtime_get)(struct mhi_controller *mhi_cntrl, void *priv);
 	void (*runtime_put)(struct mhi_controller *mhi_cntrl, void *priv);
+	u64 (*time_get)(struct mhi_controller *mhi_cntrl, void *priv);
 	void (*lpm_disable)(struct mhi_controller *mhi_cntrl, void *priv);
 	void (*lpm_enable)(struct mhi_controller *mhi_cntrl, void *priv);
 	int (*map_single)(struct mhi_controller *mhi_cntrl,
@@ -216,6 +218,11 @@ struct mhi_controller {
 	/* bounce buffer settings */
 	bool bounce_buf;
 	size_t buffer_len;
+
+	/* supports time sync feature */
+	bool time_sync;
+	struct mhi_timesync *mhi_tsync;
+	struct mhi_device *tsync_dev;
 
 	/* controller specific data */
 	void *priv_data;

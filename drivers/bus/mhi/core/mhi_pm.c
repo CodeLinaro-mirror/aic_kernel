@@ -415,6 +415,10 @@ static int mhi_pm_amss_transition(struct mhi_controller *mhi_cntrl)
 
 	read_unlock_bh(&mhi_cntrl->pm_lock);
 
+	/* setup support for time sync */
+	if (mhi_cntrl->time_sync)
+		mhi_init_timesync(mhi_cntrl);
+
 	/* add supported devices */
 	mhi_create_devices(mhi_cntrl);
 
@@ -764,6 +768,9 @@ void mhi_power_down(struct mhi_controller *mhi_cntrl, bool graceful)
 		mhi_deinit_free_irq(mhi_cntrl);
 		mhi_deinit_dev_ctxt(mhi_cntrl);
 	}
+
+	if (mhi_cntrl->mhi_tsync)
+		mhi_cntrl->mhi_tsync->db = NULL;
 }
 EXPORT_SYMBOL(mhi_power_down);
 
