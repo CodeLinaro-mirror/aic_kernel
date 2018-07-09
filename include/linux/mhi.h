@@ -326,6 +326,29 @@ static inline void *mhi_device_get_devdata(struct mhi_device *mhi_dev)
 	return mhi_dev->priv_data;
 }
 
+/**
+ * mhi_queue_transfer - Queue a buffer to hardware
+ * All transfers are asyncronous transfers
+ * @mhi_dev: Device associated with the channels
+ * @dir: Data direction
+ * @buf: Data buffer (skb for hardware channels)
+ * @len: Size in bytes
+ * @mflags: Interrupt flags for the device
+ */
+static inline int mhi_queue_transfer(struct mhi_device *mhi_dev,
+				     enum dma_data_direction dir,
+				     void *buf,
+				     size_t len,
+				     enum MHI_FLAGS mflags)
+{
+	if (dir == DMA_TO_DEVICE)
+		return mhi_dev->ul_xfer(mhi_dev, mhi_dev->ul_chan, buf, len,
+					mflags);
+	else
+		return mhi_dev->dl_xfer(mhi_dev, mhi_dev->dl_chan, buf, len,
+					mflags);
+}
+
 static inline void *mhi_controller_get_devdata(struct mhi_controller *mhi_cntrl)
 {
 	return mhi_cntrl->priv_data;
@@ -349,6 +372,21 @@ int mhi_driver_register(struct mhi_driver *mhi_drv);
 void mhi_driver_unregister(struct mhi_driver *mhi_drv);
 
 /**
+ * mhi_device_configure - configure ECA or CCA context
+ * For offload channels that client manage, call this
+ * function to configure channel context or event context
+ * array associated with the channel
+ * @mhi_div: Device associated with the channels
+ * @dir: Direction of the channel
+ * @mhi_buf: Configuration data
+ * @elements: # of configuration elements
+ */
+int mhi_device_configure(struct mhi_device *mhi_div,
+			 enum dma_data_direction dir,
+			 struct mhi_buf *mhi_buf,
+			 int elements);
+
+/**
  * mhi_device_get - disable all low power modes
  * Only disables lpm, does not immediately exit low power mode
  * if controller already in a low power mode
@@ -369,6 +407,46 @@ int mhi_device_get_sync(struct mhi_device *mhi_dev);
  * @mhi_dev: Device associated with the channels
  */
 void mhi_device_put(struct mhi_device *mhi_dev);
+
+/**
+ * mhi_prepare_for_transfer - setup channel for data transfer
+ * Moves both UL and DL channel from RESET to START state
+ * @mhi_dev: Device associated with the channels
+ */
+int mhi_prepare_for_transfer(struct mhi_device *mhi_dev);
+
+/**
+ * mhi_unprepare_from_transfer -unprepare the channels
+ * Moves both UL and DL channels to RESET state
+ * @mhi_dev: Device associated with the channels
+ */
+void mhi_unprepare_from_transfer(struct mhi_device *mhi_dev);
+
+/**
+ * mhi_get_no_free_descriptors - Get transfer ring length
+ * Get # of TD available to queue buffers
+ * @mhi_dev: Device associated with the channels
+ * @dir: Direction of the channel
+ */
+int mhi_get_no_free_descriptors(struct mhi_device *mhi_dev,
+				enum dma_data_direction dir);
+
+/**
+ * mhi_poll - poll for any available data to consume
+ * This is only applicable for DL direction
+ * @mhi_dev: Device associated with the channels
+ * @budget: In descriptors to service before returning
+ */
+int mhi_poll(struct mhi_device *mhi_dev, u32 budget);
+
+/**
+ * mhi_ioctl - user space IOCTL support for MHI channels
+ * Native support for setting  TIOCM
+ * @mhi_dev: Device associated with the channels
+ * @cmd: IOCTL cmd
+ * @arg: Optional parameter, iotcl cmd specific
+ */
+long mhi_ioctl(struct mhi_device *mhi_dev, unsigned int cmd, unsigned long arg);
 
 /**
  * mhi_alloc_controller - Allocate mhi_controller structure

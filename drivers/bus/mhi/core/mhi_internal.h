@@ -243,7 +243,6 @@ enum mhi_cmd_type {
 	MHI_CMD_TYPE_RESET = 16,
 	MHI_CMD_TYPE_STOP = 17,
 	MHI_CMD_TYPE_START = 18,
-	MHI_CMD_TYPE_TSYNC = 24,
 };
 
 /* no operation command */
@@ -267,12 +266,6 @@ enum mhi_cmd_type {
 #define MHI_TRE_CMD_START_DWORD0 (0)
 #define MHI_TRE_CMD_START_DWORD1(chid) ((chid << 24) | \
 					(MHI_CMD_TYPE_START << 16))
-
-/* time sync cfg command */
-#define MHI_TRE_CMD_TSYNC_CFG_PTR (0)
-#define MHI_TRE_CMD_TSYNC_CFG_DWORD0 (0)
-#define MHI_TRE_CMD_TSYNC_CFG_DWORD1(er) ((MHI_CMD_TYPE_TSYNC << 16) | \
-					  (er << 24))
 
 #define MHI_TRE_GET_CMD_CHID(tre) (((tre)->dword[1] >> 24) & 0xFF)
 #define MHI_TRE_GET_CMD_TYPE(tre) (((tre)->dword[1] >> 16) & 0xFF)
@@ -300,7 +293,6 @@ enum mhi_cmd_type {
 enum MHI_CMD {
 	MHI_CMD_RESET_CHAN,
 	MHI_CMD_START_CHAN,
-	MHI_CMD_TIMSYNC_CFG,
 };
 
 enum MHI_PKT_TYPE {
