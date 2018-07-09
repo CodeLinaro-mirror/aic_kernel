@@ -191,5 +191,6 @@ config MHI_BUS
 
 source "drivers/bus/fsl-mc/Kconfig"
 source "drivers/bus/mhi/controllers/Kconfig"
+source "drivers/bus/mhi/devices/Kconfig"
 
 endmenu
