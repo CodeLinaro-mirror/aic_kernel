@@ -190,5 +190,6 @@ config MHI_BUS
 	  devices that support MHI protocol.
 
 source "drivers/bus/fsl-mc/Kconfig"
+source "drivers/bus/mhi/controllers/Kconfig"
 
 endmenu
