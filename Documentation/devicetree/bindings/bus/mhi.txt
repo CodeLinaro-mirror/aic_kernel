@@ -35,7 +35,7 @@ Main node properties:
 
 - mhi,buffer-len
   Usage: optional
-  Value type: <bool>
+  Value type: <u32>
   Definition: MHI automatically pre-allocate buffers for some channel.
 	Set the length of buffer size to allocate. If not default
 	size MHI_MAX_MTU will be used.
