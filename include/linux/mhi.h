@@ -6,6 +6,15 @@
 #ifndef _MHI_H_
 #define _MHI_H_
 
+#include <linux/device.h>
+#include <linux/dma-direction.h>
+#include <linux/mutex.h>
+#include <linux/rwlock_types.h>
+#include <linux/slab.h>
+#include <linux/spinlock_types.h>
+#include <linux/wait.h>
+#include <linux/workqueue.h>
+
 struct mhi_chan;
 struct mhi_event;
 struct mhi_ctxt;
