@@ -1300,6 +1300,7 @@ void mhi_unregister_mhi_controller(struct mhi_controller *mhi_cntrl)
 	device_del(&mhi_dev->dev);
 	put_device(&mhi_dev->dev);
 }
+EXPORT_SYMBOL(mhi_unregister_mhi_controller);
 
 /* set ptr to control private data */
 static inline void mhi_controller_set_devdata(struct mhi_controller *mhi_cntrl,
