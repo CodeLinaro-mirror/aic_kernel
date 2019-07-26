@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (c) 2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
  *
  */
 
@@ -364,26 +364,8 @@ enum MHI_CH_STATE {
 	MHI_CH_STATE_ERROR = 0x5,
 };
 
-enum MHI_BRSTMODE {
-	MHI_BRSTMODE_DISABLE = 0x2,
-	MHI_BRSTMODE_ENABLE = 0x3,
-};
-
 #define MHI_INVALID_BRSTMODE(mode) (mode != MHI_BRSTMODE_DISABLE && \
 				    mode != MHI_BRSTMODE_ENABLE)
-
-enum MHI_EE {
-	MHI_EE_PBL = 0x0,
-	MHI_EE_SBL = 0x1,
-	MHI_EE_AMSS = 0x2,
-	MHI_EE_BHIE = 0x3,
-	MHI_EE_RDDM = 0x4,
-	MHI_EE_PTHRU = 0x5,
-	MHI_EE_EDL = 0x6,
-	MHI_EE_MAX_SUPPORTED = MHI_EE_EDL,
-	MHI_EE_DISABLE_TRANSITION, /* local EE, not related to mhi spec */
-	MHI_EE_MAX,
-};
 
 extern const char * const mhi_ee_str[MHI_EE_MAX];
 #define TO_MHI_EXEC_STR(ee) (((ee) >= MHI_EE_MAX) ? \
@@ -472,14 +454,6 @@ enum MHI_PM_STATE {
 #define MHI_PM_IN_SUSPEND_STATE(pm_state) (pm_state & \
 					   (MHI_PM_M3_ENTER | MHI_PM_M3))
 
-/* accepted buffer type for the channel */
-enum MHI_XFER_TYPE {
-	MHI_XFER_BUFFER,
-	MHI_XFER_SKB,
-	MHI_XFER_SCLIST,
-	MHI_XFER_NOP, /* CPU offload channel, host does not accept transfer */
-};
-
 #define NR_OF_CMD_RINGS (1)
 #define CMD_EL_PER_RING (128)
 #define PRIMARY_CMD_RING (0)
@@ -489,13 +463,6 @@ enum MHI_XFER_TYPE {
 enum MHI_ER_TYPE {
 	MHI_ER_TYPE_INVALID = 0x0,
 	MHI_ER_TYPE_VALID = 0x1,
-};
-
-enum mhi_er_data_type {
-	MHI_ER_DATA_ELEMENT_TYPE,
-	MHI_ER_CTRL_ELEMENT_TYPE,
-	MHI_ER_TSYNC_ELEMENT_TYPE,
-	MHI_ER_DATA_TYPE_MAX = MHI_ER_TSYNC_ELEMENT_TYPE,
 };
 
 struct db_cfg {
