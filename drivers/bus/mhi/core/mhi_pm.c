@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (c) 2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
  *
  */
 
@@ -786,7 +786,11 @@ int mhi_sync_power_up(struct mhi_controller *mhi_cntrl)
 			   MHI_PM_IN_ERROR_STATE(mhi_cntrl->pm_state),
 			   msecs_to_jiffies(mhi_cntrl->timeout_ms));
 
-	return (mhi_cntrl->ee == MHI_EE_AMSS) ? 0 : -EIO;
+	ret = (mhi_cntrl->ee == MHI_EE_AMSS) ? 0 : -EIO;
+
+	if (ret)
+		mhi_power_down(mhi_cntrl, false);
+	return ret;
 }
 EXPORT_SYMBOL(mhi_sync_power_up);
 
