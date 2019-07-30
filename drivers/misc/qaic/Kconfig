@@ -6,6 +6,7 @@
 config QAIC
 	tristate "Qualcomm Cloud AI 100 accelerators"
 	depends on PCI && HAS_IOMEM
+	depends on MHI_BUS
 	help
 	  Enables driver for Qualcomm's Cloud AI 100 accelerator PCIe cards
 	  that are designed to accelerate Deep Learning inference workloads.
