@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (c) 2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
  *
  */
 
@@ -628,7 +628,7 @@ void mhi_create_devices(struct mhi_controller *mhi_cntrl)
 	/*
 	 * we need to create time sync device before creating other
 	 * devices, because client may try to capture time during
-	 * clint probe.
+	 * client probe.
 	 */
 	mhi_create_time_sync_dev(mhi_cntrl);
 
