@@ -1,4 +1,7 @@
-# CONFIG_MHI_BUS is not set
+CONFIG_MHI_BUS=m
+# CONFIG_MHI_QCOM is not set
+CONFIG_MHI_UCI=m
+CONFIG_QAIC=m
 
 #
 # Automatically generated file; DO NOT EDIT.

@@ -1923,7 +1923,7 @@ CONFIG_DMA_SHARED_BUFFER=y
 #
 # Bus devices
 #
-# CONFIG_MHI_BUS is not set
+CONFIG_MHI_BUS=m
 
 #
 # MHI controllers
@@ -1934,6 +1934,7 @@ CONFIG_DMA_SHARED_BUFFER=y
 #
 # MHI device support
 #
+CONFIG_MHI_UCI=m
 # end of MHI device support
 # end of Bus devices
 
@@ -2242,6 +2243,7 @@ CONFIG_ECHO=m
 # CONFIG_MISC_ALCOR_PCI is not set
 CONFIG_MISC_RTSX_PCI=m
 # CONFIG_HABANA_AI is not set
+CONFIG_QAIC=m
 # end of Misc devices
 
 CONFIG_HAVE_IDE=y
