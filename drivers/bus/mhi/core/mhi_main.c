@@ -966,6 +966,8 @@ int mhi_process_ctrl_ev_ring(struct mhi_controller *mhi_cntrl,
 			event_quota--;
 			break;
 		default:
+			dev_err(mhi_cntrl->dev, "%s: unhandled event type %d\n",
+				__func__, type);
 			break;
 		}
 
