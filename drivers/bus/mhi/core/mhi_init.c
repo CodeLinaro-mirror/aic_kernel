@@ -17,6 +17,8 @@
 #include <linux/mhi.h>
 #include "mhi_internal.h"
 
+static struct dentry *root_dentry;
+
 const char * const mhi_ee_str[MHI_EE_MAX] = {
 	[MHI_EE_PBL] = "PBL",
 	[MHI_EE_SBL] = "SBL",
@@ -1350,7 +1352,7 @@ int register_mhi_controller(struct mhi_controller *mhi_cntrl,
 
 	mhi_cntrl->mhi_dev = mhi_dev;
 
-	mhi_cntrl->parent = debugfs_lookup(mhi_bus_type.name, NULL);
+	mhi_cntrl->parent = root_dentry;
 
 	return 0;
 
@@ -1674,7 +1676,7 @@ static int __init mhi_init(void)
 	int ret;
 
 	/* parent directory */
-	debugfs_create_dir(mhi_bus_type.name, NULL);
+	root_dentry = debugfs_create_dir(mhi_bus_type.name, NULL);
 
 	ret = bus_register(&mhi_bus_type);
 
@@ -1682,7 +1684,16 @@ static int __init mhi_init(void)
 		mhi_dtr_init();
 	return ret;
 }
+
+static void __exit mhi_exit(void)
+{
+	mhi_dtr_exit();
+	bus_unregister(&mhi_bus_type);
+	debugfs_remove_recursive(root_dentry);
+}
+
 postcore_initcall(mhi_init);
+module_exit(mhi_exit);
 
 MODULE_LICENSE("GPL v2");
 MODULE_ALIAS("MHI_CORE");
