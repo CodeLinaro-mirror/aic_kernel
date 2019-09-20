@@ -20,7 +20,7 @@
 # - Use /. to avoid tar packing just the symlink
 
 # Note that the rpm-pkg target cannot be used with KBUILD_OUTPUT,
-# but the binrpm-pkg target can; for some reason O= gets ignored.
+# but the binrpm-pkg target can
 
 # Remove hyphens since they have special meaning in RPM filenames
 KERNELPATH := kernel-$(subst -,_,$(KERNELRELEASE))
@@ -31,6 +31,12 @@ export KDEB_SOURCENAME
 TAR_CONTENT := $(KBUILD_ALLDIRS) .config .scmversion Makefile \
                Kbuild Kconfig COPYING $(wildcard localversion*)
 MKSPEC     := $(srctree)/scripts/package/mkspec
+
+RPM_OUTDIR :=
+ifneq ($(objtree),$(srctree))
+# Using absolute path as relative path will cause parts of rpmbuild to fail
+        RPM_OUTDIR := --define "_topdir $(abs_objtree)/rpmbuild"
+endif
 
 quiet_cmd_src_tar = TAR     $(2).tar.gz
       cmd_src_tar = \
@@ -62,8 +68,8 @@ rpm-pkg: FORCE
 binrpm-pkg: FORCE
 	$(MAKE) -f $(srctree)/Makefile
 	$(CONFIG_SHELL) $(MKSPEC) prebuilt > $(objtree)/binkernel.spec
-	+rpmbuild $(RPMOPTS) --define "_builddir $(objtree)" --target \
-		$(UTS_MACHINE) -bb $(objtree)/binkernel.spec
+	+rpmbuild $(RPMOPTS) --define "_builddir $(objtree)" $(RPM_OUTDIR) \
+		--target $(UTS_MACHINE) -bb $(objtree)/binkernel.spec
 
 clean-files += $(objtree)/*.spec
 
