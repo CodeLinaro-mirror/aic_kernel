@@ -499,12 +499,6 @@ static void mhi_pm_disable_transition(struct mhi_controller *mhi_cntrl,
 		tasklet_kill(&mhi_event->task);
 	}
 
-	dev_info(mhi_cntrl->dev,
-		 "Reset all active channels and remove mhi devices\n");
-	device_for_each_child(mhi_cntrl->dev, NULL, mhi_destroy_device);
-
-	dev_info(mhi_cntrl->dev, "Finish resetting channels\n");
-
 	/* release lock and wait for all pending thread to complete */
 	mutex_unlock(&mhi_cntrl->pm_mutex);
 	dev_info(mhi_cntrl->dev,
@@ -514,6 +508,12 @@ static void mhi_pm_disable_transition(struct mhi_controller *mhi_cntrl,
 	flush_work(&mhi_cntrl->fw_worker);
 
 	mutex_lock(&mhi_cntrl->pm_mutex);
+
+	dev_info(mhi_cntrl->dev,
+		 "Reset all active channels and remove mhi devices\n");
+	device_for_each_child(mhi_cntrl->dev, NULL, mhi_destroy_device);
+
+	dev_info(mhi_cntrl->dev, "Finish resetting channels\n");
 
 	/* reset the ev rings and cmd rings */
 	dev_info(mhi_cntrl->dev, "Resetting EV CTXT and CMD CTXT\n");
