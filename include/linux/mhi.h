@@ -8,12 +8,25 @@
 
 #include <linux/device.h>
 #include <linux/dma-direction.h>
+#include <linux/mod_devicetable.h>
 #include <linux/mutex.h>
 #include <linux/rwlock_types.h>
 #include <linux/slab.h>
 #include <linux/spinlock_types.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
+
+#define MHI_NAME_SIZE 32
+
+/**
+ * struct mhi_device_id - MHI device identification
+ * @chan: MHI channel name
+ * @driver_data: driver data;
+ */
+struct mhi_device_id {
+	const char chan[MHI_NAME_SIZE];
+	kernel_ulong_t driver_data;
+};
 
 struct mhi_chan;
 struct mhi_event;
