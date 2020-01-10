@@ -212,8 +212,11 @@ int mhi_ready_state_transition(struct mhi_controller *mhi_cntrl)
 		return -EIO;
 
 	/* device did not transition to ready state */
-	if (reset || !ready)
+	if (reset || !ready) {
+		dev_err(mhi_cntrl->dev, "Timeout moving to READY state.  Reset status %d ready status %d\n",
+			reset, ready);
 		return -ETIMEDOUT;
+	}
 
 	dev_info(mhi_cntrl->dev, "Device in READY State\n");
 	write_lock_irq(&mhi_cntrl->pm_lock);
