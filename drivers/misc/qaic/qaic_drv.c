@@ -524,13 +524,15 @@ static void qaic_pci_remove(struct pci_dev *pdev)
 	mutex_unlock(&qdev->users_mutex);
 
 	/* remove chardev to prevent new users from coming in */
-	devno = qdev->dev->devt;
-	qdev->dev = NULL;
-	device_destroy(qaic_class, devno);
-	cdev_del(&qdev->cdev);
-	mutex_lock(&qaic_devs_lock);
-	idr_remove(&qaic_devs, MINOR(devno));
-	mutex_unlock(&qaic_devs_lock);
+	if (qdev->dev) {
+		devno = qdev->dev->devt;
+		qdev->dev = NULL;
+		device_destroy(qaic_class, devno);
+		cdev_del(&qdev->cdev);
+		mutex_lock(&qaic_devs_lock);
+		idr_remove(&qaic_devs, MINOR(devno));
+		mutex_unlock(&qaic_devs_lock);
+	}
 
 	/* make existing users get unresolvable errors until they close FDs */
 	list_for_each_entry_safe(usr, u, &qdev->users, node) {
@@ -654,4 +656,4 @@ module_exit(qaic_exit);
 MODULE_AUTHOR("Qualcomm Cloud AI 100 Accelerator Kernel Driver Team");
 MODULE_DESCRIPTION("Qualcomm Cloud 100 AI Accelerators Driver");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.4.3"); /* MAJOR.MINOR.PATCH */
+MODULE_VERSION("1.4.4"); /* MAJOR.MINOR.PATCH */
