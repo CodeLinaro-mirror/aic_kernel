@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
  *
  */
 
@@ -10,6 +10,7 @@
 #include <linux/dma-direction.h>
 #include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
+#include <linux/iopoll.h>
 #include <linux/list.h>
 #include <linux/of.h>
 #include <linux/module.h>
@@ -652,6 +653,7 @@ int mhi_async_power_up(struct mhi_controller *mhi_cntrl)
 	u32 val;
 	enum MHI_EE current_ee;
 	enum MHI_ST_TRANSITION next_state;
+	enum MHI_STATE state;
 
 	dev_info(mhi_cntrl->dev, "Requested to power on\n");
 
@@ -711,6 +713,24 @@ int mhi_async_power_up(struct mhi_controller *mhi_cntrl)
 		dev_info(mhi_cntrl->dev, "Not a valid ee for power on\n");
 		ret = -EIO;
 		goto error_bhi_offset;
+	}
+
+	state = mhi_get_m_state(mhi_cntrl);
+	if (state == MHI_STATE_SYS_ERR) {
+		mhi_set_mhi_state(mhi_cntrl, MHI_STATE_RESET);
+		ret = readl_poll_timeout(mhi_cntrl->regs + MHICTRL, val,
+					 !(val & MHICTRL_RESET_MASK), 1000,
+					 mhi_cntrl->timeout_ms * 1000);
+		if (ret) {
+			dev_info(mhi_cntrl->dev, "Failed to reset syserr\n");
+			goto error_bhi_offset;
+		}
+
+		/*
+		 * device cleares INTVEC as part of RESET processing,
+		 * re-program it
+		 */
+		mhi_write_reg(mhi_cntrl, mhi_cntrl->bhi, BHI_INTVEC, 0);
 	}
 
 	/* transition to next state */
