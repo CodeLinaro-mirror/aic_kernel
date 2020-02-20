@@ -1644,12 +1644,12 @@ static int mhi_driver_remove(struct device *dev)
 
 	/* de_init channel if it was enabled */
 	for (dir = 0; dir < 2; dir++) {
-		mutex_lock(&mhi_chan->mutex);
 		mhi_chan = dir ? mhi_dev->ul_chan : mhi_dev->dl_chan;
 
 		if (!mhi_chan)
 			continue;
 
+		mutex_lock(&mhi_chan->mutex);
 		if (ch_state[dir] == MHI_CH_STATE_ENABLED &&
 		    !mhi_chan->offload_ch)
 			mhi_deinit_chan_ctxt(mhi_cntrl, mhi_chan);
