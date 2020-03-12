@@ -15,6 +15,7 @@
 #include <linux/sched.h>
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
+#include <linux/wait.h>
 #include <uapi/misc/qaic.h>
 
 #include "mhi_controller.h"
@@ -475,6 +476,7 @@ static int qaic_pci_probe(struct pci_dev *pdev,
 		qdev->dbc[i].id = i;
 		INIT_LIST_HEAD(&qdev->dbc[i].xfer_list);
 		init_srcu_struct(&qdev->dbc[i].ch_lock);
+		init_waitqueue_head(&qdev->dbc[i].dbc_release);
 	}
 
 	qdev->bars = pci_select_bars(pdev, IORESOURCE_MEM);
@@ -755,4 +757,4 @@ module_exit(qaic_exit);
 MODULE_AUTHOR("Qualcomm Cloud AI 100 Accelerator Kernel Driver Team");
 MODULE_DESCRIPTION("Qualcomm Cloud 100 AI Accelerators Driver");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("2.0.5"); /* MAJOR.MINOR.PATCH */
+MODULE_VERSION("2.0.6"); /* MAJOR.MINOR.PATCH */
