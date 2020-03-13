@@ -269,6 +269,7 @@ static int qaic_mhi_probe(struct mhi_device *mhi_dev,
 					to_pci_dev(mhi_dev->mhi_cntrl->dev));
 
 	pci_dbg(qdev->pdev, "%s\n", __func__);
+	qdev->in_reset = false;
 
 	mhi_device_set_devdata(mhi_dev, qdev);
 	qdev->cntl_ch = mhi_dev;
@@ -344,7 +345,7 @@ static void qaic_mhi_remove(struct mhi_device *mhi_dev)
 {
 }
 
-static void qaic_dev_reset_clean_local_state(struct qaic_device *qdev)
+void qaic_dev_reset_clean_local_state(struct qaic_device *qdev)
 {
 	struct qaic_user *usr;
 	struct qaic_user *u;
@@ -743,4 +744,4 @@ module_exit(qaic_exit);
 MODULE_AUTHOR("Qualcomm Cloud AI 100 Accelerator Kernel Driver Team");
 MODULE_DESCRIPTION("Qualcomm Cloud 100 AI Accelerators Driver");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.7.8"); /* MAJOR.MINOR.PATCH */
+MODULE_VERSION("1.7.9"); /* MAJOR.MINOR.PATCH */
