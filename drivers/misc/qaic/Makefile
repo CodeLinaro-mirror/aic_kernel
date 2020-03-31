@@ -3,6 +3,9 @@
 # Makefile for Qualcomm Cloud AI 100 accelerators driver
 #
 
+#setup for TRACE_INCLUDE_PATH for various build environments
+subdir-ccflags-y := -I$(src)
+
 obj-$(CONFIG_QAIC)	:= qaic.o
 
 qaic-y := \
