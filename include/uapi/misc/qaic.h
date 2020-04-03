@@ -104,17 +104,6 @@ struct qaic_manage_msg {
 	__u8 data[];
 };
 
-struct qaic_mem_req {
-	__u64 handle; /* 0 to alloc/import, or a valid handle to free */
-	__u64 size;   /* size to alloc, will be rounded to PAGE_SIZE */
-	__u32 dir;    /* direction of data: 1 = to device, 2 = from device */
-	__u32 dbc_id; /* Identifier of assigned DMA Bridge channel */
-	__u64 offset; /* offset within dmabuf FD */
-	__u64 buf_fd; /* A valid Buf FD if its a dmabuf import,
-			 else -1ULL) */
-	__u64 resv;   /* reserved for future use, must be 0 */
-};
-
 struct qaic_sem { /* semaphore command */
 	__u16 val;     /* only lower 12 bits are valid */
 	__u8  index;   /* only lower 5 bits are valid */
@@ -124,21 +113,30 @@ struct qaic_sem { /* semaphore command */
 	__u16 resv;    /* reserved for future use, must be 0 */
 };
 
-struct qaic_execute {
-	__u16		ver;    /* struct version, must be 1 */
-	__u8		dir;    /* 1 = to device, 2 = from device */
-	__u8		db_len; /* doorbell length - 32, 16, or 8 bits. 0 means
-				   doorbell is inactive */
-	__u32		db_data;/* data to write to doorbell */
-	__u64		db_addr;/* doorbell address */
-	__u64		handle; /* mem handle from mem_req */
-	__u64		dev_addr;
-	__u32		dbc_id; /* Identifier of assigned DMA Bridge channel */
-	__u32		resv;   /* reserved for future use, must be 0 */
+struct qaic_mem_req {
+	__u64 handle; /* 0 to alloc/import, or a valid handle to free */
+	__u64 size;   /* size to alloc, will be rounded to PAGE_SIZE */
+	__u32 dir;    /* direction of data: 1 = to device, 2 = from device */
+	__u32 dbc_id; /* Identifier of assigned DMA Bridge channel */
 	struct qaic_sem	sem0;   /* Must be zero if not valid */
 	struct qaic_sem	sem1;   /* Must be zero if not valid */
 	struct qaic_sem	sem2;   /* Must be zero if not valid */
 	struct qaic_sem	sem3;   /* Must be zero if not valid */
+	__u64 dev_addr;
+	__u64 db_addr;/* doorbell address */
+	__u32 db_data;/* data to write to doorbell */
+	__u32 db_len; /* doorbell length - 32, 16, or 8 bits. 0 means
+		       * doorbell is inactive
+		       */
+	__u64 offset; /* offset within dmabuf FD */
+	__u64 buf_fd; /* A valid Buf FD if its a dmabuf import, else -1ULL) */
+};
+
+struct qaic_execute {
+	__u64 handle; /* mem handle from mem_req */
+	__u32 dbc_id; /* Identifier of assigned DMA Bridge channel */
+	__u16 dir;    /* 1 = to device, 2 = from device */
+	__u16 resv;   /* align to 64 bit size */
 };
 
 struct qaic_wait_exec {

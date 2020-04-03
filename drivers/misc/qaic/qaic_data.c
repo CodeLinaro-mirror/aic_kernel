@@ -124,6 +124,137 @@ static int reserve_pages(unsigned long start_pfn, unsigned long nr_pages,
 	return 0;
 }
 
+static int encode_reqs(struct qaic_device *qdev, struct mem_handle *mem,
+		       struct qaic_mem_req *req)
+{
+	u8 cmd = BULK_XFER;
+	u64 db_addr = cpu_to_le64(req->db_addr);
+	u8 db_len;
+	u32 db_data = cpu_to_le32(req->db_data);
+	struct scatterlist *sg;
+	u64 dev_addr;
+	int presync_sem;
+	int i;
+
+	if (!mem->no_xfer)
+		cmd |= (req->dir == DMA_TO_DEVICE ? INBOUND_XFER :
+								OUTBOUND_XFER);
+
+	if (req->db_len && !IS_ALIGNED(req->db_addr, req->db_len / 8))
+		return -EINVAL;
+
+	presync_sem = req->sem0.presync + req->sem1.presync +
+		      req->sem2.presync + req->sem3.presync;
+	if (presync_sem > 1)
+		return -EINVAL;
+
+	presync_sem = req->sem0.presync << 0 | req->sem1.presync << 1 |
+		      req->sem2.presync << 2 | req->sem3.presync << 3;
+
+	switch (req->db_len) {
+	case 32:
+		db_len = BIT(7);
+		break;
+	case 16:
+		db_len = BIT(7) | 1;
+		break;
+	case 8:
+		db_len = BIT(7) | 2;
+		break;
+	case 0:
+		db_len = 0; /* doorbell is not active for this command */
+		break;
+	default:
+		return -EINVAL; /* should never hit this */
+	}
+
+	/*
+	 * When we end up splitting up a single request (ie a mem handle) into
+	 * multiple DMA requests, we have to manage the sync data carefully.
+	 * There can only be one presync sem.  That needs to be on every xfer
+	 * so that the DMA engine doesn't transfer data before the receiver is
+	 * ready.  We only do the doorbell and postsync sems after the xfer.
+	 * To guarantee previous xfers for the request are complete, we use a
+	 * fence.
+	 */
+	dev_addr = req->dev_addr;
+	for_each_sg(mem->sgt->sgl, sg, mem->nents, i) {
+		mem->reqs[i].cmd = cmd;
+		mem->reqs[i].src_addr =
+			cpu_to_le64(req->dir == DMA_TO_DEVICE ?
+					sg_dma_address(sg) : dev_addr);
+		mem->reqs[i].dest_addr =
+			cpu_to_le64(req->dir == DMA_TO_DEVICE ?
+					dev_addr : sg_dma_address(sg));
+		mem->reqs[i].len = cpu_to_le32(sg_dma_len(sg));
+		switch (presync_sem) {
+		case BIT(0):
+			mem->reqs[i].sem_cmd0 = cpu_to_le32(
+						ENCODE_SEM(req->sem0.val,
+							req->sem0.index,
+							req->sem0.presync,
+							req->sem0.cmd,
+							req->sem0.flags));
+			break;
+		case BIT(1):
+			mem->reqs[i].sem_cmd1 = cpu_to_le32(
+						ENCODE_SEM(req->sem1.val,
+							req->sem1.index,
+							req->sem1.presync,
+							req->sem1.cmd,
+							req->sem1.flags));
+			break;
+		case BIT(2):
+			mem->reqs[i].sem_cmd2 = cpu_to_le32(
+						ENCODE_SEM(req->sem2.val,
+							req->sem2.index,
+							req->sem2.presync,
+							req->sem2.cmd,
+							req->sem2.flags));
+			break;
+		case BIT(3):
+			mem->reqs[i].sem_cmd3 = cpu_to_le32(
+						ENCODE_SEM(req->sem3.val,
+							req->sem3.index,
+							req->sem3.presync,
+							req->sem3.cmd,
+							req->sem3.flags));
+			break;
+		}
+		dev_addr += sg_dma_len(sg);
+	}
+	/* add post transfer stuff to last segment */
+	i--;
+	mem->reqs[i].cmd |= GEN_COMPLETION;
+	mem->reqs[i].db_addr = db_addr;
+	mem->reqs[i].db_len = db_len;
+	mem->reqs[i].db_data = db_data;
+	req->sem0.flags |= (req->dir == DMA_TO_DEVICE ? SEM_INSYNCFENCE :
+							SEM_OUTSYNCFENCE);
+	mem->reqs[i].sem_cmd0 = cpu_to_le32(ENCODE_SEM(req->sem0.val,
+						       req->sem0.index,
+						       req->sem0.presync,
+						       req->sem0.cmd,
+						       req->sem0.flags));
+	mem->reqs[i].sem_cmd1 = cpu_to_le32(ENCODE_SEM(req->sem1.val,
+						       req->sem1.index,
+						       req->sem1.presync,
+						       req->sem1.cmd,
+						       req->sem1.flags));
+	mem->reqs[i].sem_cmd2 = cpu_to_le32(ENCODE_SEM(req->sem2.val,
+						       req->sem2.index,
+						       req->sem2.presync,
+						       req->sem2.cmd,
+						       req->sem2.flags));
+	mem->reqs[i].sem_cmd3 = cpu_to_le32(ENCODE_SEM(req->sem3.val,
+						       req->sem3.index,
+						       req->sem3.presync,
+						       req->sem3.cmd,
+						       req->sem3.flags));
+
+	return 0;
+}
+
 static int alloc_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
 {
 	struct mem_handle *mem;
@@ -246,14 +377,18 @@ static int alloc_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
 	init_completion(&mem->xfer_done);
 	complete_all(&mem->xfer_done);
 
+	ret = encode_reqs(qdev, mem, req);
+	if (ret)
+		goto encode_req_fail;
+
 	ret = mutex_lock_interruptible(&qdev->dbc[req->dbc_id].mem_lock);
 	if (ret)
-		goto lock_fail;
+		goto encode_req_fail;
 	ret = idr_alloc(&qdev->dbc[req->dbc_id].mem_handles, mem, 1, 0,
 		       GFP_KERNEL);
 	mutex_unlock(&qdev->dbc[req->dbc_id].mem_lock);
 	if (ret < 0)
-		goto lock_fail;
+		goto encode_req_fail;
 
 	req->handle = ret | (u64)req->dbc_id << PGOFF_DBC_SHIFT;
 	/*
@@ -266,7 +401,7 @@ static int alloc_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
 
 	return 0;
 
-lock_fail:
+encode_req_fail:
 	kfree(mem->reqs);
 req_alloc_fail:
 	dma_unmap_sg(&qdev->pdev->dev, sgt->sgl, sgt->nents, req->dir);
@@ -476,6 +611,10 @@ static int map_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
 	init_completion(&mem->xfer_done);
 	complete_all(&mem->xfer_done);
 
+	ret = encode_reqs(qdev, mem, req);
+	if (ret)
+		goto free_req;
+
 	ret = mutex_lock_interruptible(&dbc->mem_lock);
 	if (ret)
 		goto free_req;
@@ -585,6 +724,16 @@ lock_fail:
 	return ret;
 }
 
+static bool invalid_sem(struct qaic_sem *sem)
+{
+	if (sem->val & ~SEM_VAL_MASK || sem->index & ~SEM_INDEX_MASK ||
+	    !(sem->presync == 0 || sem->presync == 1) || sem->resv ||
+	    sem->flags & ~(SEM_INSYNCFENCE | SEM_OUTSYNCFENCE) ||
+	    sem->cmd > SEM_WAIT_GT_0)
+		return true;
+	return false;
+}
+
 int qaic_mem_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 		   unsigned long arg)
 {
@@ -597,7 +746,10 @@ int qaic_mem_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 		goto out;
 	}
 
-	if (req.dbc_id >= QAIC_NUM_DBC || req.resv) {
+	if (req.dbc_id >= QAIC_NUM_DBC || !(req.db_len == 32 ||
+		req.db_len == 16 || req.db_len == 8 || req.db_len == 0) ||
+		invalid_sem(&req.sem0) || invalid_sem(&req.sem1) ||
+		invalid_sem(&req.sem2) || invalid_sem(&req.sem3)) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -688,150 +840,6 @@ out:
 	return ret;
 }
 
-static bool invalid_sem(struct qaic_sem *sem)
-{
-	if (sem->val & ~SEM_VAL_MASK || sem->index & ~SEM_INDEX_MASK ||
-	    !(sem->presync == 0 || sem->presync == 1) || sem->resv ||
-	    sem->flags & ~(SEM_INSYNCFENCE | SEM_OUTSYNCFENCE) ||
-	    sem->cmd > SEM_WAIT_GT_0)
-		return true;
-	return false;
-}
-
-static int encode_execute(struct qaic_device *qdev, struct mem_handle *mem,
-			  struct qaic_execute *exec, u16 req_id)
-{
-	u8 cmd = BULK_XFER;
-	u64 db_addr = cpu_to_le64(exec->db_addr);
-	u8 db_len;
-	u32 db_data = cpu_to_le32(exec->db_data);
-	struct scatterlist *sg;
-	u64 dev_addr;
-	int presync_sem;
-	int i;
-
-	if (!mem->no_xfer)
-		cmd |= (exec->dir == DMA_TO_DEVICE ? INBOUND_XFER :
-								OUTBOUND_XFER);
-
-	req_id = cpu_to_le16(req_id);
-
-	if (exec->db_len && !IS_ALIGNED(exec->db_addr, exec->db_len / 8))
-		return -EINVAL;
-
-	presync_sem = exec->sem0.presync + exec->sem1.presync +
-		      exec->sem2.presync + exec->sem3.presync;
-	if (presync_sem > 1)
-		return -EINVAL;
-
-	presync_sem = exec->sem0.presync << 0 | exec->sem1.presync << 1 |
-		      exec->sem2.presync << 2 | exec->sem3.presync << 3;
-
-	switch (exec->db_len) {
-	case 32:
-		db_len = BIT(7);
-		break;
-	case 16:
-		db_len = BIT(7) | 1;
-		break;
-	case 8:
-		db_len = BIT(7) | 2;
-		break;
-	case 0:
-		db_len = 0; /* doorbell is not active for this command */
-		break;
-	default:
-		return -EINVAL; /* should never hit this */
-	}
-
-	/*
-	 * When we end up splitting up a single request (ie a mem handle) into
-	 * multiple DMA requests, we have to manage the sync data carefully.
-	 * There can only be one presync sem.  That needs to be on every xfer
-	 * so that the DMA engine doesn't transfer data before the receiver is
-	 * ready.  We only do the doorbell and postsync sems after the xfer.
-	 * To guarantee previous xfers for the request are complete, we use a
-	 * fence.
-	 */
-	dev_addr = exec->dev_addr;
-	for_each_sg(mem->sgt->sgl, sg, mem->nents, i) {
-		mem->reqs[i].req_id = req_id;
-		mem->reqs[i].cmd = cmd;
-		mem->reqs[i].src_addr =
-			cpu_to_le64(exec->dir == DMA_TO_DEVICE ?
-					sg_dma_address(sg) : dev_addr);
-		mem->reqs[i].dest_addr =
-			cpu_to_le64(exec->dir == DMA_TO_DEVICE ?
-					dev_addr : sg_dma_address(sg));
-		mem->reqs[i].len = cpu_to_le32(sg_dma_len(sg));
-		switch (presync_sem) {
-		case BIT(0):
-			mem->reqs[i].sem_cmd0 = cpu_to_le32(
-						ENCODE_SEM(exec->sem0.val,
-							exec->sem0.index,
-							exec->sem0.presync,
-							exec->sem0.cmd,
-							exec->sem0.flags));
-			break;
-		case BIT(1):
-			mem->reqs[i].sem_cmd1 = cpu_to_le32(
-						ENCODE_SEM(exec->sem1.val,
-							exec->sem1.index,
-							exec->sem1.presync,
-							exec->sem1.cmd,
-							exec->sem1.flags));
-			break;
-		case BIT(2):
-			mem->reqs[i].sem_cmd2 = cpu_to_le32(
-						ENCODE_SEM(exec->sem2.val,
-							exec->sem2.index,
-							exec->sem2.presync,
-							exec->sem2.cmd,
-							exec->sem2.flags));
-			break;
-		case BIT(3):
-			mem->reqs[i].sem_cmd3 = cpu_to_le32(
-						ENCODE_SEM(exec->sem3.val,
-							exec->sem3.index,
-							exec->sem3.presync,
-							exec->sem3.cmd,
-							exec->sem3.flags));
-			break;
-		}
-		dev_addr += sg_dma_len(sg);
-	}
-	/* add post transfer stuff to last segment */
-	i--;
-	mem->reqs[i].cmd |= GEN_COMPLETION;
-	mem->reqs[i].db_addr = db_addr;
-	mem->reqs[i].db_len = db_len;
-	mem->reqs[i].db_data = db_data;
-	exec->sem0.flags |= (exec->dir == DMA_TO_DEVICE ? SEM_INSYNCFENCE :
-							SEM_OUTSYNCFENCE);
-	mem->reqs[i].sem_cmd0 = cpu_to_le32(ENCODE_SEM(exec->sem0.val,
-						       exec->sem0.index,
-						       exec->sem0.presync,
-						       exec->sem0.cmd,
-						       exec->sem0.flags));
-	mem->reqs[i].sem_cmd1 = cpu_to_le32(ENCODE_SEM(exec->sem1.val,
-						       exec->sem1.index,
-						       exec->sem1.presync,
-						       exec->sem1.cmd,
-						       exec->sem1.flags));
-	mem->reqs[i].sem_cmd2 = cpu_to_le32(ENCODE_SEM(exec->sem2.val,
-						       exec->sem2.index,
-						       exec->sem2.presync,
-						       exec->sem2.cmd,
-						       exec->sem2.flags));
-	mem->reqs[i].sem_cmd3 = cpu_to_le32(ENCODE_SEM(exec->sem3.val,
-						       exec->sem3.index,
-						       exec->sem3.presync,
-						       exec->sem3.cmd,
-						       exec->sem3.flags));
-
-	return 0;
-}
-
 static int commit_execute(struct qaic_device *qdev, struct mem_handle *mem,
 			  u32 dbc_id)
 {
@@ -887,6 +895,7 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	int dbc_id;
 	int rcu_id;
 	int ret;
+	int i;
 
 	exec = kmalloc(sizeof(*exec), GFP_KERNEL);
 	if (!exec) {
@@ -899,13 +908,8 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 		goto free_exec;
 	}
 
-	if (exec->dbc_id > QAIC_NUM_DBC || exec->ver != 1 ||
-	    !(exec->dir == 1 || exec->dir == 2) ||
-	    !(exec->db_len == 32 || exec->db_len == 16 || exec->db_len == 8 ||
-	      exec->db_len == 0) ||
-	    invalid_sem(&exec->sem0) || invalid_sem(&exec->sem1) ||
-	    invalid_sem(&exec->sem2) || invalid_sem(&exec->sem3) ||
-	    exec->resv) {
+	if (exec->dbc_id > QAIC_NUM_DBC || !(exec->dir == 1 ||
+	    exec->dir == 2)) {
 		ret = -EINVAL;
 		goto free_exec;
 	}
@@ -954,16 +958,11 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	mem->queued = true;
 	spin_unlock_irqrestore(&qdev->dbc[exec->dbc_id].xfer_lock, flags);
 	mem->req_id = req_id;
+	for (i = 0; i < mem->nents; i++)
+		mem->reqs[i].req_id = cpu_to_le16(req_id);
 
 	if (queued) {
 		ret = -EINVAL;
-		kref_put(&mem->ref_count, free_handle_mem);
-		goto release_rcu;
-	}
-
-	ret = encode_execute(qdev, mem, exec, req_id);
-	if (ret) {
-		mem->queued = false;
 		kref_put(&mem->ref_count, free_handle_mem);
 		goto release_rcu;
 	}
