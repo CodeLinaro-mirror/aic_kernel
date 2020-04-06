@@ -1,3 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only
+ *
+ * Copyright (c) 2020, The Linux Foundation. All rights reserved.
+ */
+
 #if !defined(_TRACE_QAIC_H) || defined(TRACE_HEADER_MULTI_READ)
 #define _TRACE_QAIC_H
 #include <linux/tracepoint.h>
