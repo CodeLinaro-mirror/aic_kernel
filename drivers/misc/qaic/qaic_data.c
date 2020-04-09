@@ -125,7 +125,7 @@ static int reserve_pages(unsigned long start_pfn, unsigned long nr_pages,
 }
 
 static int encode_reqs(struct qaic_device *qdev, struct mem_handle *mem,
-		       struct qaic_mem_req *req)
+		       struct qaic_mem_req_entry *req)
 {
 	u8 cmd = BULK_XFER;
 	u64 db_addr = cpu_to_le64(req->db_addr);
@@ -255,7 +255,8 @@ static int encode_reqs(struct qaic_device *qdev, struct mem_handle *mem,
 	return 0;
 }
 
-static int alloc_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
+static int alloc_handle(struct qaic_device *qdev,
+			struct qaic_mem_req_entry *req, u32 dbc_id)
 {
 	struct mem_handle *mem;
 	struct scatterlist *sg;
@@ -373,7 +374,7 @@ static int alloc_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
 	mem->qdev = qdev;
 	mem->queued = false;
 	mem->dma_buf = NULL;
-	mem->dbc_id = req->dbc_id;
+	mem->dbc_id = dbc_id;
 	init_completion(&mem->xfer_done);
 	complete_all(&mem->xfer_done);
 
@@ -381,16 +382,16 @@ static int alloc_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
 	if (ret)
 		goto encode_req_fail;
 
-	ret = mutex_lock_interruptible(&qdev->dbc[req->dbc_id].mem_lock);
+	ret = mutex_lock_interruptible(&qdev->dbc[dbc_id].mem_lock);
 	if (ret)
 		goto encode_req_fail;
-	ret = idr_alloc(&qdev->dbc[req->dbc_id].mem_handles, mem, 1, 0,
+	ret = idr_alloc(&qdev->dbc[dbc_id].mem_handles, mem, 1, 0,
 		       GFP_KERNEL);
-	mutex_unlock(&qdev->dbc[req->dbc_id].mem_lock);
+	mutex_unlock(&qdev->dbc[dbc_id].mem_lock);
 	if (ret < 0)
 		goto encode_req_fail;
 
-	req->handle = ret | (u64)req->dbc_id << PGOFF_DBC_SHIFT;
+	req->handle = ret | (u64)dbc_id << PGOFF_DBC_SHIFT;
 	/*
 	 * When userspace uses the handle as the offset parameter to mmap,
 	 * it needs to be in multiples of PAGE_SIZE.
@@ -436,10 +437,11 @@ static void free_dma_handle(struct kref *kref)
 	kfree(dma_handle);
 }
 
-static int alloc_dma_handle(struct qaic_device *qdev, struct qaic_mem_req *req,
-			    struct dma_buf_handle **handle)
+static int alloc_dma_handle(struct qaic_device *qdev,
+			    struct qaic_mem_req_entry *req,
+			    struct dma_buf_handle **handle, u32 dbc_id)
 {
-	struct dma_bridge_chan *dbc = &qdev->dbc[req->dbc_id];
+	struct dma_bridge_chan *dbc = &qdev->dbc[dbc_id];
 	struct dma_buf_handle *dma_handle;
 	int ret;
 
@@ -498,9 +500,10 @@ out:
 	return ret;
 }
 
-static int map_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
+static int map_handle(struct qaic_device *qdev, struct qaic_mem_req_entry *req,
+		      u32 dbc_id)
 {
-	struct dma_bridge_chan *dbc = &qdev->dbc[req->dbc_id];
+	struct dma_bridge_chan *dbc = &qdev->dbc[dbc_id];
 	struct scatterlist *sg, *sgn, *sgf, *sgl;
 	int total_len, len, nents, offf = 0, offl = 0;
 	struct dma_buf_handle *dma_handle;
@@ -523,7 +526,7 @@ static int map_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
 	if (dma_handle) {
 		kref_get(&dma_handle->ref_count);
 	} else {
-		ret = alloc_dma_handle(qdev, req, &dma_handle);
+		ret = alloc_dma_handle(qdev, req, &dma_handle, dbc_id);
 		if (ret) {
 			mutex_unlock(&dbc->dma_lock);
 			goto out;
@@ -607,7 +610,7 @@ static int map_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
 	mem->qdev = qdev;
 	mem->queued = false;
 	mem->dma_buf = dma_handle;
-	mem->dbc_id = req->dbc_id;
+	mem->dbc_id = dbc_id;
 	init_completion(&mem->xfer_done);
 	complete_all(&mem->xfer_done);
 
@@ -624,7 +627,7 @@ static int map_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
 	if (ret < 0)
 		goto free_req;
 
-	req->handle = ret | (u64)req->dbc_id << PGOFF_DBC_SHIFT;
+	req->handle = ret | (u64)dbc_id << PGOFF_DBC_SHIFT;
 	/*
 	 * When userspace uses the handle as the offset parameter to mmap,
 	 * it needs to be in multiples of PAGE_SIZE.
@@ -680,7 +683,8 @@ static void free_handle_mem(struct kref *kref)
 	kfree(mem);
 }
 
-static int free_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
+static int free_handle(struct qaic_device *qdev, struct qaic_mem_req_entry *req,
+		       u32 req_dbc_id)
 {
 	struct mem_handle *mem;
 	unsigned long flags;
@@ -695,7 +699,7 @@ static int free_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
 	handle >>= PAGE_SHIFT;
 	dbc_id >>= PAGE_SHIFT;
 
-	if (dbc_id != req->dbc_id)
+	if (dbc_id != req_dbc_id)
 		return -EINVAL;
 
 	ret = mutex_lock_interruptible(&qdev->dbc[dbc_id].mem_lock);
@@ -737,47 +741,119 @@ static bool invalid_sem(struct qaic_sem *sem)
 int qaic_mem_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 		   unsigned long arg)
 {
-	struct qaic_mem_req req;
+	struct qaic_mem_req_entry *req;
+	struct qaic_mem_req_hdr *hdr;
+	bool alloc_path = false;
+	bool free_path = false;
+	int ret = 0, ret_free;
+	u32 dbc_id;
 	int rcu_id;
-	int ret;
+	int count;
+	int i, j;
 
-	if (copy_from_user(&req, (void __user *)arg, sizeof(req))) {
+	hdr = kmalloc(sizeof(*hdr), GFP_KERNEL);
+	if (!hdr) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	if (copy_from_user(hdr, (void __user *)arg, sizeof(*hdr))) {
 		ret = -EFAULT;
-		goto out;
+		goto free_hdr;
 	}
 
-	if (req.dbc_id >= QAIC_NUM_DBC || !(req.db_len == 32 ||
-		req.db_len == 16 || req.db_len == 8 || req.db_len == 0) ||
-		invalid_sem(&req.sem0) || invalid_sem(&req.sem1) ||
-		invalid_sem(&req.sem2) || invalid_sem(&req.sem3)) {
+	count = hdr->count;
+
+	if (count > ((sizeof(struct qaic_mem_req) - sizeof(*hdr)) /
+			     sizeof(*req))) {
 		ret = -EINVAL;
-		goto out;
+		goto free_hdr;
 	}
 
-	rcu_id = srcu_read_lock(&qdev->dbc[req.dbc_id].ch_lock);
-	if (!qdev->dbc[req.dbc_id].usr ||
-	    usr->handle != qdev->dbc[req.dbc_id].usr->handle) {
+	req = kcalloc(count, sizeof(*req), GFP_KERNEL);
+	if (!req) {
+		ret = -ENOMEM;
+		goto free_hdr;
+	}
+
+	if (copy_from_user(req, (void __user *)(arg + sizeof(*hdr)),
+			   sizeof(*req) * count)) {
+		ret = -EFAULT;
+		goto free_req;
+	}
+
+	dbc_id = hdr->dbc_id;
+
+	if (dbc_id >= QAIC_NUM_DBC) {
+		ret = -EINVAL;
+		goto free_req;
+	}
+
+	rcu_id = srcu_read_lock(&qdev->dbc[dbc_id].ch_lock);
+
+	if (!qdev->dbc[dbc_id].usr ||
+			usr->handle != qdev->dbc[dbc_id].usr->handle) {
 		ret = -EPERM;
 		goto release_rcu;
 	}
 
-	if (!req.handle) {
-		if (req.buf_fd != -1ULL)
-			ret = map_handle(qdev, &req);
-		else
-			ret = alloc_handle(qdev, &req);
-		if (!ret && copy_to_user((void __user *)arg, &req,
-					 sizeof(req))) {
-			ret = -EFAULT;
-			free_handle(qdev, &req);
-			goto release_rcu;
+	for (i = 0; i < count; i++) {
+		if (req[i].resv || !(req[i].db_len == 32 ||
+		    req[i].db_len == 16 || req[i].db_len == 8 ||
+		    req[i].db_len == 0) || invalid_sem(&req[i].sem0) ||
+		    invalid_sem(&req[i].sem1) || invalid_sem(&req[i].sem2) ||
+		    invalid_sem(&req[i].sem3)) {
+			ret = -EINVAL;
+			goto free_handles;
 		}
-	} else {
-		ret = free_handle(qdev, &req);
+
+		if (!req[i].handle) {
+			alloc_path = true;
+			if (free_path) {
+				ret = -EINVAL;
+				i--;
+				goto free_handles;
+			}
+			if (req[i].buf_fd != -1ULL)
+				ret = map_handle(qdev, &req[i], dbc_id);
+			else
+				ret = alloc_handle(qdev, &req[i], dbc_id);
+			if (ret)
+				goto free_handles;
+		} else {
+			free_path = true;
+			if (alloc_path) {
+				ret = -EINVAL;
+				i--;
+				goto free_handles;
+			}
+			ret_free = free_handle(qdev, &req[i], dbc_id);
+			if (ret_free)
+				ret = ret_free;
+		}
 	}
 
+	if (alloc_path) {
+		ret = copy_to_user((void __user *)(arg + sizeof(*hdr)), &req[0],
+			     sizeof(*req) * count);
+		if (!ret)
+			goto release_rcu;
+		ret = -EFAULT;
+	} else {
+		goto release_rcu;
+	}
+
+free_handles:
+	if (alloc_path) {
+		for (j = 0; j <= i; j++)
+			free_handle(qdev, &req[j], dbc_id);
+	}
 release_rcu:
-	srcu_read_unlock(&qdev->dbc[req.dbc_id].ch_lock, rcu_id);
+	srcu_read_unlock(&qdev->dbc[dbc_id].ch_lock, rcu_id);
+free_req:
+	kfree(req);
+free_hdr:
+	kfree(hdr);
 out:
 	return ret;
 }
@@ -886,97 +962,123 @@ static int commit_execute(struct qaic_device *qdev, struct mem_handle *mem,
 int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 		       unsigned long arg)
 {
+	struct qaic_execute_entry *exec;
+	struct qaic_execute_hdr *hdr;
 	struct mem_handle *mem;
-	struct qaic_execute *exec;
 	unsigned long flags;
 	bool queued;
 	u16 req_id;
 	int handle;
 	int dbc_id;
 	int rcu_id;
+	int count;
 	int ret;
-	int i;
+	int i, j;
 
-	exec = kmalloc(sizeof(*exec), GFP_KERNEL);
-	if (!exec) {
+	hdr = kmalloc(sizeof(*hdr), GFP_KERNEL);
+	if (!hdr) {
 		ret = -ENOMEM;
 		goto out;
 	}
 
-	if (copy_from_user(exec, (void __user *)arg, sizeof(*exec))) {
+	if (copy_from_user(hdr, (void __user *)arg, sizeof(*hdr))) {
+		ret = -EFAULT;
+		goto free_hdr;
+	}
+
+	if (hdr->dbc_id > QAIC_NUM_DBC) {
+		ret = -EINVAL;
+		goto free_hdr;
+	}
+
+	count = hdr->count;
+
+	if (count > ((sizeof(struct qaic_execute) - sizeof(*hdr)) /
+			     sizeof(*exec))) {
+		ret = -EINVAL;
+		goto free_hdr;
+	}
+
+	exec = kcalloc(count, sizeof(*exec), GFP_KERNEL);
+	if (!exec) {
+		ret = -ENOMEM;
+		goto free_hdr;
+	}
+
+	if (copy_from_user(exec, (void __user *)(arg + sizeof(*hdr)),
+			   sizeof(*exec) * count)) {
 		ret = -EFAULT;
 		goto free_exec;
 	}
 
-	if (exec->dbc_id > QAIC_NUM_DBC || !(exec->dir == 1 ||
-	    exec->dir == 2)) {
-		ret = -EINVAL;
-		goto free_exec;
-	}
-
-	rcu_id = srcu_read_lock(&qdev->dbc[exec->dbc_id].ch_lock);
-	if (!qdev->dbc[exec->dbc_id].usr ||
-	    qdev->dbc[exec->dbc_id].usr->handle != usr->handle) {
+	rcu_id = srcu_read_lock(&qdev->dbc[hdr->dbc_id].ch_lock);
+	if (!qdev->dbc[hdr->dbc_id].usr ||
+	    qdev->dbc[hdr->dbc_id].usr->handle != usr->handle) {
 		ret = -EPERM;
 		goto release_rcu;
 	}
 
-	handle = exec->handle & ~PGOFF_DBC_MASK;
-	dbc_id = (exec->handle & PGOFF_DBC_MASK) >> PGOFF_DBC_SHIFT;
+	for (i = 0; i < count; i++) {
+		handle = exec[i].handle & ~PGOFF_DBC_MASK;
+		dbc_id = (exec[i].handle & PGOFF_DBC_MASK) >> PGOFF_DBC_SHIFT;
 
-	/* we shifted up by PAGE_SHIFT to make mmap happy, need to undo that */
-	handle >>= PAGE_SHIFT;
-	dbc_id >>= PAGE_SHIFT;
+		/*
+		 * we shifted up by PAGE_SHIFT to make mmap happy,
+		 * need to undo that
+		 */
+		handle >>= PAGE_SHIFT;
+		dbc_id >>= PAGE_SHIFT;
 
-	if (dbc_id != exec->dbc_id) {
-		ret = -EINVAL;
-		goto release_rcu;
-	}
+		if (dbc_id != hdr->dbc_id) {
+			ret = -EINVAL;
+			goto release_rcu;
+		}
 
-	ret = mutex_lock_interruptible(&qdev->dbc[exec->dbc_id].mem_lock);
-	if (ret)
-		goto release_rcu;
-	mem = idr_find(&qdev->dbc[exec->dbc_id].mem_handles, handle);
-	if (!mem) {
-		ret = -ENODEV;
-		mutex_unlock(&qdev->dbc[exec->dbc_id].mem_lock);
-		goto release_rcu;
-	}
-	/* prevent free_handle from taking the memory from under us */
-	kref_get(&mem->ref_count);
-	mutex_unlock(&qdev->dbc[exec->dbc_id].mem_lock);
+		ret = mutex_lock_interruptible(&qdev->dbc[dbc_id].mem_lock);
+		if (ret)
+			goto release_rcu;
+		mem = idr_find(&qdev->dbc[dbc_id].mem_handles, handle);
+		if (!mem) {
+			ret = -ENODEV;
+			mutex_unlock(&qdev->dbc[dbc_id].mem_lock);
+			goto release_rcu;
+		}
+		/* prevent free_handle from taking the memory from under us */
+		kref_get(&mem->ref_count);
+		mutex_unlock(&qdev->dbc[dbc_id].mem_lock);
 
-	if (mem->dir != exec->dir) {
-		ret = -EINVAL;
-		kref_put(&mem->ref_count, free_handle_mem);
-		goto release_rcu;
-	}
+		if (mem->dir != exec[i].dir) {
+			ret = -EINVAL;
+			kref_put(&mem->ref_count, free_handle_mem);
+			goto release_rcu;
+		}
 
-	spin_lock_irqsave(&qdev->dbc[exec->dbc_id].xfer_lock, flags);
-	req_id = qdev->dbc[exec->dbc_id].next_req_id++;
-	queued = mem->queued;
-	mem->queued = true;
-	spin_unlock_irqrestore(&qdev->dbc[exec->dbc_id].xfer_lock, flags);
-	mem->req_id = req_id;
-	for (i = 0; i < mem->nents; i++)
-		mem->reqs[i].req_id = cpu_to_le16(req_id);
+		spin_lock_irqsave(&qdev->dbc[dbc_id].xfer_lock, flags);
+		req_id = qdev->dbc[dbc_id].next_req_id++;
+		queued = mem->queued;
+		mem->queued = true;
+		spin_unlock_irqrestore(&qdev->dbc[dbc_id].xfer_lock, flags);
+		mem->req_id = req_id;
+		for (j = 0; j < mem->nents; j++)
+			mem->reqs[j].req_id = cpu_to_le16(req_id);
 
-	if (queued) {
-		ret = -EINVAL;
-		kref_put(&mem->ref_count, free_handle_mem);
-		goto release_rcu;
-	}
+		if (queued) {
+			ret = -EINVAL;
+			kref_put(&mem->ref_count, free_handle_mem);
+			goto release_rcu;
+		}
 
-	dma_sync_sg_for_device(&qdev->pdev->dev, mem->sgt->sgl, mem->sgt->nents,
-			       mem->dir);
+		dma_sync_sg_for_device(&qdev->pdev->dev, mem->sgt->sgl,
+				       mem->sgt->nents, mem->dir);
 
-	spin_lock_irqsave(&qdev->dbc[exec->dbc_id].xfer_lock, flags);
-	ret = commit_execute(qdev, mem, exec->dbc_id);
-	spin_unlock_irqrestore(&qdev->dbc[exec->dbc_id].xfer_lock, flags);
-	if (ret) {
-		mem->queued = false;
-		kref_put(&mem->ref_count, free_handle_mem);
-		goto sync_to_cpu;
+		spin_lock_irqsave(&qdev->dbc[dbc_id].xfer_lock, flags);
+		ret = commit_execute(qdev, mem, dbc_id);
+		spin_unlock_irqrestore(&qdev->dbc[dbc_id].xfer_lock, flags);
+		if (ret) {
+			mem->queued = false;
+			kref_put(&mem->ref_count, free_handle_mem);
+			goto sync_to_cpu;
+		}
 	}
 
 	goto release_rcu;
@@ -985,9 +1087,11 @@ sync_to_cpu:
 	dma_sync_sg_for_cpu(&qdev->pdev->dev, mem->sgt->sgl, mem->sgt->nents,
 			    mem->dir);
 release_rcu:
-	srcu_read_unlock(&qdev->dbc[exec->dbc_id].ch_lock, rcu_id);
+	srcu_read_unlock(&qdev->dbc[hdr->dbc_id].ch_lock, rcu_id);
 free_exec:
 	kfree(exec);
+free_hdr:
+	kfree(hdr);
 out:
 	return ret;
 }

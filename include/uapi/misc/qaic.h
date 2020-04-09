@@ -11,6 +11,8 @@
 
 /* The length includes len and count fields of qaic_manage_msg */
 #define QAIC_MANAGE_MAX_MSG_LENGTH SZ_4K
+#define QAIC_MEM_IOCTL_MAX_SIZE SZ_4K
+#define QAIC_EXEC_IOCTL_MAX_SIZE SZ_4K
 
 enum qaic_sem_flags {
 	SEM_INSYNCFENCE =	0x1,
@@ -113,11 +115,11 @@ struct qaic_sem { /* semaphore command */
 	__u16 resv;    /* reserved for future use, must be 0 */
 };
 
-struct qaic_mem_req {
+struct qaic_mem_req_entry {
 	__u64 handle; /* 0 to alloc/import, or a valid handle to free */
 	__u64 size;   /* size to alloc, will be rounded to PAGE_SIZE */
 	__u32 dir;    /* direction of data: 1 = to device, 2 = from device */
-	__u32 dbc_id; /* Identifier of assigned DMA Bridge channel */
+	__u32 resv;   /* Align with 64 bit */
 	struct qaic_sem	sem0;   /* Must be zero if not valid */
 	struct qaic_sem	sem1;   /* Must be zero if not valid */
 	struct qaic_sem	sem2;   /* Must be zero if not valid */
@@ -132,11 +134,32 @@ struct qaic_mem_req {
 	__u64 buf_fd; /* A valid Buf FD if its a dmabuf import, else -1ULL) */
 };
 
-struct qaic_execute {
-	__u64 handle; /* mem handle from mem_req */
+struct qaic_mem_req_hdr {
+	__u32 count;  /* number of memory request following this header */
 	__u32 dbc_id; /* Identifier of assigned DMA Bridge channel */
-	__u16 dir;    /* 1 = to device, 2 = from device */
-	__u16 resv;   /* align to 64 bit size */
+};
+
+struct qaic_mem_req {
+	struct qaic_mem_req_hdr hdr;
+	__u8 data[QAIC_MEM_IOCTL_MAX_SIZE - sizeof(struct qaic_mem_req_hdr)];
+		      /* qaic_mem_req_entry container */
+};
+
+struct qaic_execute_entry {
+	__u64 handle; /* mem handle from mem_req */
+	__u32 dir;    /* 1 = to device, 2 = from device */
+	__u32 resv;   /* Align with 64 bit */
+};
+
+struct qaic_execute_hdr {
+	__u32 count;  /* number of executes following this header */
+	__u32 dbc_id; /* Identifier of assigned DMA Bridge channel */
+};
+
+struct qaic_execute {
+	struct qaic_execute_hdr hdr;
+	__u8 data[QAIC_EXEC_IOCTL_MAX_SIZE - sizeof(struct qaic_execute_hdr)];
+		      /* qaic_execute_entry container */
 };
 
 struct qaic_wait_exec {
@@ -197,6 +220,11 @@ struct qaic_wait_exec {
  * other tasks (ring doorbell, etc).  A handle from a zero size request cannot
  * be mmap()'d. A 0 size request is not valid if this IOCTL is used to
  * map user allocated dma buf memory.
+ *
+ * User need to request memory buffers of one batch together. A header
+ * in request elements has information about number of following request
+ * entries. Request of all elements together in batch is either
+ * successful or failed.
  *
  * The return value is 0 for success, or a standard error code.  Some of the
  * possible errors:
