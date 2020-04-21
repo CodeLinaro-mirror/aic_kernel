@@ -373,8 +373,10 @@ static int mhi_uci_open(struct inode *inode, struct file *filp)
 		return ret;
 
 	mutex_lock(&uci_dev->mutex);
-	if (!uci_dev->enabled)
+	if (!uci_dev->enabled) {
+		ret = -ENODEV;
 		goto error_open_chan;
+	}
 
 	uci_dev->ref_count++;
 
