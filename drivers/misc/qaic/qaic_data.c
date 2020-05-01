@@ -3,6 +3,7 @@
 /* Copyright (c) 2019-2020, The Linux Foundation. All rights reserved. */
 
 #include <linux/completion.h>
+#include <linux/dma-buf.h>
 #include <linux/dma-mapping.h>
 #include <linux/idr.h>
 #include <linux/kref.h>
@@ -68,6 +69,16 @@ struct dbc_rsp { /* everything must be little endian encoded */
 	u16	status;
 } __packed;
 
+struct dma_buf_handle {
+	int			buf_fd;
+	struct dma_buf		*buf;
+	struct dma_buf_attachment *attach;
+	struct sg_table		*sgt;
+	struct idr		*handles;
+	int			dir;
+	struct kref		ref_count;
+};
+
 struct mem_handle {
 	struct sg_table		*sgt;  /* Mapped pages */
 	int			nents; /* num dma mapped elements in sgt */
@@ -80,6 +91,8 @@ struct mem_handle {
 	struct qaic_device	*qdev;
 	bool			queued;
 	bool			no_xfer;
+	struct dma_buf_handle	*dma_buf;
+	u32			dbc_id;
 };
 
 inline int get_dbc_req_elem_size(void)
@@ -228,6 +241,8 @@ static int alloc_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
 	mem->dir = req->dir;
 	mem->qdev = qdev;
 	mem->queued = false;
+	mem->dma_buf = NULL;
+	mem->dbc_id = req->dbc_id;
 
 	ret = mutex_lock_interruptible(&qdev->dbc[req->dbc_id].mem_lock);
 	if (ret)
@@ -270,6 +285,229 @@ out:
 	return ret;
 }
 
+static void free_dma_handle(struct kref *kref)
+{
+	struct dma_buf_handle *dma_handle =
+				container_of(kref, struct dma_buf_handle,
+					     ref_count);
+
+	dma_buf_unmap_attachment(dma_handle->attach, dma_handle->sgt,
+				 dma_handle->dir);
+	dma_buf_detach(dma_handle->buf, dma_handle->attach);
+	dma_buf_put(dma_handle->buf);
+	idr_remove(dma_handle->handles, dma_handle->buf_fd);
+	kfree(dma_handle);
+}
+
+static int alloc_dma_handle(struct qaic_device *qdev, struct qaic_mem_req *req,
+			    struct dma_buf_handle **handle)
+{
+	struct dma_bridge_chan *dbc = &qdev->dbc[req->dbc_id];
+	struct dma_buf_handle *dma_handle;
+	int ret;
+
+	dma_handle = kzalloc(sizeof(*dma_handle), GFP_KERNEL);
+	if (!dma_handle) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	dma_handle->buf = dma_buf_get(req->buf_fd);
+	if (IS_ERR(dma_handle->buf)) {
+		ret = PTR_ERR(dma_handle->buf);
+		goto free_handle;
+	}
+
+	dma_handle->attach = dma_buf_attach(dma_handle->buf, &qdev->pdev->dev);
+	if (IS_ERR(dma_handle->attach)) {
+		ret = PTR_ERR(dma_handle->attach);
+		goto buf_put;
+	}
+
+	dma_handle->sgt = dma_buf_map_attachment(dma_handle->attach, req->dir);
+	if (IS_ERR(dma_handle->sgt)) {
+		ret = PTR_ERR(dma_handle->sgt);
+		goto buf_detach;
+	}
+
+	dma_handle->dir = req->dir;
+	dma_handle->buf_fd = req->buf_fd;
+
+	ret = idr_alloc(&dbc->dma_handles, dma_handle, req->buf_fd,
+			req->buf_fd + 1, GFP_KERNEL);
+
+	if (ret != req->buf_fd)
+		goto buf_unmap;
+
+	dma_handle->handles = &dbc->dma_handles;
+
+	kref_init(&dma_handle->ref_count);
+
+	*handle = dma_handle;
+
+	return 0;
+
+buf_unmap:
+	dma_buf_unmap_attachment(dma_handle->attach, dma_handle->sgt, req->dir);
+buf_detach:
+	dma_buf_detach(dma_handle->buf, dma_handle->attach);
+buf_put:
+	dma_buf_put(dma_handle->buf);
+free_handle:
+	kfree(dma_handle);
+out:
+	*handle = NULL;
+
+	return ret;
+}
+
+static int map_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
+{
+	struct dma_bridge_chan *dbc = &qdev->dbc[req->dbc_id];
+	struct scatterlist *sg, *sgn, *sgf, *sgl;
+	int total_len, len, nents, offf, offl;
+	struct dma_buf_handle *dma_handle;
+	struct mem_handle *mem;
+	struct sg_table *sgt;
+	int ret, j;
+
+	if (!(req->dir == DMA_TO_DEVICE || req->dir == DMA_FROM_DEVICE ||
+	      req->dir == DMA_BIDIRECTIONAL)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ret = mutex_lock_interruptible(&dbc->dma_lock);
+	if (ret)
+		goto out;
+
+	dma_handle = idr_find(&dbc->dma_handles, req->buf_fd);
+
+	if (dma_handle) {
+		kref_get(&dma_handle->ref_count);
+	} else {
+		ret = alloc_dma_handle(qdev, req, &dma_handle);
+		if (ret) {
+			mutex_unlock(&dbc->dma_lock);
+			goto out;
+		}
+	}
+	mutex_unlock(&dbc->dma_lock);
+
+	/* find out number of relevant nents needed for this mem */
+	total_len = 0;
+	sgf = NULL;
+	sgl = NULL;
+	nents = 0;
+	for (sg = dma_handle->sgt->sgl; sg; sg = sg_next(sg)) {
+		len = sg_dma_len(sg);
+		if (req->offset >= total_len &&
+		    req->offset < total_len + len) {
+			sgf = sg;
+			offf = req->offset - total_len;
+		}
+		if (sgf)
+			nents++;
+		if (req->offset + req->size >= total_len &&
+		    req->offset + req->size <= total_len + len) {
+			sgl = sg;
+			offl = req->offset + req->size - total_len;
+			break;
+		}
+		total_len += len;
+	}
+
+	if (!sgf || !sgl) {
+		ret = -EINVAL;
+		goto put_dma_handle_ref;
+	}
+
+	mem = kmalloc(sizeof(*mem), GFP_KERNEL);
+	if (!mem) {
+		ret = -ENOMEM;
+		goto put_dma_handle_ref;
+	}
+
+	sgt = kzalloc(sizeof(*sgt), GFP_KERNEL);
+	if (!sgt) {
+		ret = -ENOMEM;
+		goto free_mem;
+	}
+
+	ret = sg_alloc_table(sgt, nents, GFP_KERNEL);
+	if (ret)
+		goto free_sgt;
+
+	/* copy relevant sg node and fix dma address, length if needed */
+	sgn = sgf;
+	for_each_sg(sgt->sgl, sg, nents, j) {
+		memcpy(sg, sgn, sizeof(*sg));
+		if (sgn == sgf) {
+			sg_dma_address(sg) += offf;
+			sg_dma_len(sg) -= offf;
+		} else {
+			offf = 0;
+		}
+		if (sgn == sgl)
+			sg_dma_len(sg) = offl - offf;
+		sgn = sg_next(sgn);
+	}
+
+	if (req->dir == DMA_TO_DEVICE || req->dir == DMA_BIDIRECTIONAL)
+		dma_sync_sg_for_cpu(&qdev->pdev->dev, sgt->sgl, sgt->nents,
+				    req->dir);
+
+	mem->reqs = kcalloc(nents, sizeof(*mem->reqs), GFP_KERNEL);
+	if (!mem->reqs) {
+		ret = -ENOMEM;
+		goto free_table;
+	}
+
+	mem->no_xfer = false;
+	mem->sgt = sgt;
+	mem->nents = sgt->nents;
+	mem->dir = req->dir;
+	mem->qdev = qdev;
+	mem->queued = false;
+	mem->dma_buf = dma_handle;
+	mem->dbc_id = req->dbc_id;
+
+	ret = mutex_lock_interruptible(&dbc->mem_lock);
+	if (ret)
+		goto free_req;
+	ret = idr_alloc(&dbc->mem_handles, mem, 1, 0,
+		       GFP_KERNEL);
+	mutex_unlock(&dbc->mem_lock);
+	if (ret < 0)
+		goto free_req;
+
+	req->handle = ret | (u64)req->dbc_id << PGOFF_DBC_SHIFT;
+	/*
+	 * When userspace uses the handle as the offset parameter to mmap,
+	 * it needs to be in multiples of PAGE_SIZE.
+	 */
+	req->handle <<= PAGE_SHIFT;
+
+	kref_init(&mem->ref_count);
+
+	return 0;
+
+free_req:
+	kfree(mem->reqs);
+free_table:
+	sg_free_table(sgt);
+free_sgt:
+	kfree(sgt);
+free_mem:
+	kfree(mem);
+put_dma_handle_ref:
+	mutex_lock(&dbc->dma_lock);
+	kref_put(&dma_handle->ref_count, free_dma_handle);
+	mutex_unlock(&dbc->dma_lock);
+out:
+	return ret;
+}
+
 static void free_handle_mem(struct kref *kref)
 {
 	struct mem_handle *mem = container_of(kref, struct mem_handle,
@@ -278,14 +516,21 @@ static void free_handle_mem(struct kref *kref)
 	struct sg_table *sgt;
 
 	sgt = mem->sgt;
-	dma_unmap_sg(&mem->qdev->pdev->dev, sgt->sgl, sgt->nents, mem->dir);
-	for (sg = sgt->sgl; sg; sg = sg_next(sg))
-		if (sg_page(sg)) {
-			reserve_pages(page_to_pfn(sg_page(sg)),
-				      DIV_ROUND_UP(sg->length, PAGE_SIZE),
-				      false);
-			__free_pages(sg_page(sg), get_order(sg->length));
-		}
+	if (mem->dma_buf) {
+		mutex_lock(&mem->qdev->dbc[mem->dbc_id].dma_lock);
+		kref_put(&mem->dma_buf->ref_count, free_dma_handle);
+		mutex_unlock(&mem->qdev->dbc[mem->dbc_id].dma_lock);
+	} else {
+		dma_unmap_sg(&mem->qdev->pdev->dev, sgt->sgl, sgt->nents, mem->dir);
+		for (sg = sgt->sgl; sg; sg = sg_next(sg))
+			if (sg_page(sg)) {
+				reserve_pages(page_to_pfn(sg_page(sg)),
+					      DIV_ROUND_UP(sg->length,
+					      PAGE_SIZE), false);
+				__free_pages(sg_page(sg),
+					     get_order(sg->length));
+			}
+	}
 	sg_free_table(sgt);
 	kfree(sgt);
 	kfree(mem->reqs);
@@ -361,7 +606,10 @@ int qaic_mem_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	}
 
 	if (!req.handle) {
-		ret = alloc_handle(qdev, &req);
+		if (req.buf_fd != -1ULL)
+			ret = map_handle(qdev, &req);
+		else
+			ret = alloc_handle(qdev, &req);
 		if (!ret && copy_to_user((void __user *)arg, &req,
 					 sizeof(req))) {
 			ret = -EFAULT;
@@ -414,7 +662,7 @@ int qaic_data_mmap(struct qaic_device *qdev, struct qaic_user *usr,
 		goto release_rcu;
 	}
 
-	if (mem->no_xfer) {
+	if (mem->no_xfer || mem->dma_buf) {
 		ret = -EINVAL;
 		goto release_rcu;
 	}

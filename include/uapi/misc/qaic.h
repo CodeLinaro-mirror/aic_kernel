@@ -103,11 +103,14 @@ struct qaic_manage_msg {
 };
 
 struct qaic_mem_req {
-	__u64 handle; /* 0 to alloc, or a valid handle to free */
+	__u64 handle; /* 0 to alloc/import, or a valid handle to free */
 	__u64 size;   /* size to alloc, will be rounded to PAGE_SIZE */
 	__u32 dir;    /* direction of data: 0 = bidirectional data,
 			 1 = to device, 2 = from device */
 	__u32 dbc_id; /* Identifier of assigned DMA Bridge channel */
+	__u64 offset; /* offset within dmabuf FD */
+	__u64 buf_fd; /* A valid Buf FD if its a dmabuf import,
+			 else -1ULL) */
 	__u64 resv;   /* reserved for future use, must be 0 */
 };
 
@@ -174,7 +177,7 @@ struct qaic_wait_exec {
 #define QAIC_IOCTL_MANAGE _IOWR('Q', QAIC_IOCTL_MANAGE_NR, struct manage_msg)
 
 /*
- * Memory alloc/free
+ * Memory alloc/free or map/unmap
  *
  * Allows user to request buffers to send/receive data to/from the device
  * via a DMA Bridge channel.  An allocated buffer may then be mmap'd to be
@@ -182,13 +185,19 @@ struct qaic_wait_exec {
  * user will request a pool of buffers, and reuse the buffers as necessary
  * to send/receive multiple sets of data with the device over time.
  *
- * The handle to the allocated buffer will be returned in the struct upon
- * success.  A buffer to be freed cannot be accessed after the ioctl is called.
+ * It also allow user to map a dma buf memory which user can pass. If
+ * user passes a valid(postive) buffer FD then driver will map buffer
+ * using dma buf APIs.
+ *
+ * The handle to the allocated/mapped buffer will be returned in the
+ * struct upon success. A buffer to be freed cannot be accessed after
+ * the ioctl is called.
  *
  * A request for a 0 size buffer is valid.  This signals that the DMA
  * operation to/from the device does not transfer data, but does perform
  * other tasks (ring doorbell, etc).  A handle from a zero size request cannot
- * be mmap()'d.
+ * be mmap()'d. A 0 size request is not valid if this IOCTL is used to
+ * map user allocated dma buf memory.
  *
  * The return value is 0 for success, or a standard error code.  Some of the
  * possible errors:
