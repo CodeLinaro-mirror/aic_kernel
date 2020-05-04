@@ -68,7 +68,6 @@ struct qaic_device {
 	struct cdev		*cdev;
 	struct device		*dev;
 	struct dma_bridge_chan	dbc[QAIC_NUM_DBC];
-	struct work_struct	reset_work;
 	struct work_struct	reset_mhi_work;
 	struct workqueue_struct	*cntl_wq;
 	bool			in_reset;
