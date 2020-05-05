@@ -17,6 +17,15 @@
 #include <linux/mhi.h>
 #include "mhi_internal.h"
 
+void mhi_do_soc_reset(struct mhi_controller *mhi_cntrl)
+{
+	if (mhi_cntrl && mhi_cntrl->has_soc_reset)
+		mhi_write_reg(mhi_cntrl, mhi_cntrl->regs,
+			      mhi_cntrl->soc_reset_offset,
+			      mhi_cntrl->soc_reset_val);
+}
+EXPORT_SYMBOL(mhi_do_soc_reset);
+
 static struct dentry *root_dentry;
 
 static ssize_t soc_reset_store(struct device *dev,
@@ -35,8 +44,7 @@ static ssize_t soc_reset_store(struct device *dev,
 		goto out;
 	}
 
-	mhi_write_reg(mhi_cntrl, mhi_cntrl->regs, mhi_cntrl->soc_reset_offset,
-		      mhi_cntrl->soc_reset_val);
+	mhi_do_soc_reset(mhi_cntrl);
 
 out:
 	return count;
