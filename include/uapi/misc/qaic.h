@@ -46,7 +46,8 @@ enum qaic_manage_transaction_type {
 	TRANS_STATUS_TO_DEV =		15,
 	TRANS_TERMINATE_FROM_DEV =	16,
 	TRANS_TERMINATE_TO_DEV =	17,
-	TRANS_MAX =			18
+	TRANS_DMA_XFER_CONT =		18,
+	TRANS_MAX =			19
 };
 
 struct qaic_manage_trans_hdr {

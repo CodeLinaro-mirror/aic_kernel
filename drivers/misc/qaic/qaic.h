@@ -30,6 +30,7 @@ struct qaic_user {
 	struct list_head	node;
 	struct srcu_struct	qdev_lock;
 	struct kref		ref_count;
+	atomic_t		chunk_id;
 };
 
 struct dma_bridge_chan {

@@ -81,7 +81,15 @@ struct _trans_dma_xfer {
 	struct _trans_hdr hdr;
 	u32 tag;
 	u32 count;
+	u32 dma_chunk_id;
 	struct _addr_size_pair data[];
+} __packed;
+
+/* Initiated by device to continue the DMA xfer of a large piece of data */
+struct _trans_dma_xfer_cont {
+	struct _trans_hdr hdr;
+	u32 dma_chunk_id;
+	u64 xferred_size;
 } __packed;
 
 struct _trans_activate_to_dev {
@@ -150,6 +158,9 @@ struct ioctl_resources {
 	void *rsp_q_base;
 	u32 status;
 	u32 dbc_id;
+	u32 dma_chunk_id;
+	u64 xferred_dma_size;
+	void *trans_hdr;
 };
 
 struct resp_work {
@@ -274,6 +285,7 @@ static int encode_dma(struct qaic_device *qdev, void *trans,
 	struct wrapper_msg *trans_wrapper;
 	struct wrapper_msg *wrapper;
 	struct _addr_size_pair *asp;
+	unsigned long need_pages;
 	struct scatterlist *last;
 	struct page **page_list;
 	unsigned long nr_pages;
@@ -282,6 +294,7 @@ static int encode_dma(struct qaic_device *qdev, void *trans,
 	struct dma_xfer *xfer;
 	struct sg_table *sgt;
 	unsigned int dma_len;
+	u64 dma_chunk_len;
 	struct _msg *msg;
 	void *boundary;
 	int nents;
@@ -313,17 +326,28 @@ static int encode_dma(struct qaic_device *qdev, void *trans,
 		goto out;
 	}
 
-	nr_pages = PAGE_ALIGN(in_trans->size + offset_in_page(in_trans->addr))
-								>> PAGE_SHIFT;
+	need_pages = PAGE_ALIGN(in_trans->size + offset_in_page(in_trans->addr) -
+				resources->xferred_dma_size) >> PAGE_SHIFT;
 
-	page_list = kmalloc_array(nr_pages, sizeof(*page_list), GFP_KERNEL);
-	if (!page_list) {
-		trace_encode_error(qdev, "dma page list alloc fail");
-		ret = -ENOMEM;
-		goto free_resource;
+	nr_pages = need_pages;
+
+	while(1) {
+		page_list = kmalloc_array(nr_pages, sizeof(*page_list),
+				GFP_KERNEL | __GFP_NOWARN);
+		if (!page_list) {
+			nr_pages = nr_pages/2;
+			if (!nr_pages) {
+				trace_encode_error(qdev, "dma page list alloc fail");
+				ret = -ENOMEM;
+				goto free_resource;
+			}
+		} else {
+			break;
+		}
 	}
 
-	ret = get_user_pages_fast(in_trans->addr, nr_pages, 0, page_list);
+	ret = get_user_pages_fast(in_trans->addr + resources->xferred_dma_size,
+				  nr_pages, 0, page_list);
 	if (ret < 0 || ret != nr_pages) {
 		trace_encode_error(qdev, "dma get user pages fail");
 		ret = -EFAULT;
@@ -338,8 +362,8 @@ static int encode_dma(struct qaic_device *qdev, void *trans,
 	}
 
 	ret = sg_alloc_table_from_pages(sgt, page_list, nr_pages,
-					offset_in_page(in_trans->addr),
-					in_trans->size, GFP_KERNEL);
+					offset_in_page(in_trans->addr + resources->xferred_dma_size),
+					in_trans->size - resources->xferred_dma_size, GFP_KERNEL);
 	if (ret) {
 		trace_encode_error(qdev, "dma alloc table from pages fail");
 		ret = -ENOMEM;
@@ -394,11 +418,13 @@ static int encode_dma(struct qaic_device *qdev, void *trans,
 	last = sgt->sgl;
 	dma_len = 0;
 	w = trans_wrapper;
+	dma_chunk_len = 0;
 	for_each_sg(sgt->sgl, sg, nents, dmas) {
 		/* hit a discontinuity, finalize segment and start new one */
 		if (sg_dma_address(last) + sg_dma_len(last) !=
 		    sg_dma_address(sg)) {
 			asp->size = cpu_to_le64(dma_len);
+			dma_chunk_len += dma_len;
 			if (dma_len) {
 				asp++;
 				if ((void *)asp + sizeof(*asp) > boundary) {
@@ -435,8 +461,21 @@ static int encode_dma(struct qaic_device *qdev, void *trans,
 	out_trans->tag = cpu_to_le32(in_trans->tag);
 	out_trans->count = cpu_to_le32((size - sizeof(*out_trans))/
 			               sizeof(*asp));
+	dma_chunk_len += dma_len;
 
 	*user_len += in_trans->hdr.len;
+
+	if (resources->dma_chunk_id)
+		out_trans->dma_chunk_id = cpu_to_le32(resources->dma_chunk_id);
+	else if (need_pages > nr_pages) {
+		while (resources->dma_chunk_id == 0)
+			resources->dma_chunk_id =
+				atomic_inc_return(&usr->chunk_id);
+
+		out_trans->dma_chunk_id = cpu_to_le32(resources->dma_chunk_id);
+	}
+	resources->xferred_dma_size += dma_chunk_len;
+	resources->trans_hdr = trans;
 
 	xfer->sgt = sgt;
 	xfer->page_list = page_list;
@@ -618,6 +657,14 @@ static int encode_message(struct qaic_device *qdev,
 	msg = &wrapper->msg;
 
 	msg->hdr.len = sizeof(msg->hdr);
+
+	if (resources->dma_chunk_id) {
+		ret = encode_dma(qdev, resources->trans_hdr, wrappers,
+				 &user_len, resources, usr);
+		msg->hdr.count = 1;
+		goto out;
+	}
+
 	for (i = 0; i < user_msg->count; ++i) {
 		if (user_len >= user_msg->len) {
 			trace_encode_error(qdev, "msg exceeds len");
@@ -667,7 +714,7 @@ static int encode_message(struct qaic_device *qdev,
 		trace_encode_error(qdev, "msg processed exceeds len");
 		ret = -EINVAL;
 	}
-
+out:
 	if (ret) {
 		free_dma_xfers(qdev, resources);
 		free_dbc_buf(qdev, resources);
@@ -947,6 +994,46 @@ static void *msg_xfer(struct qaic_device *qdev, struct wrapper_list *wrappers,
 	return elem.buf;
 }
 
+/* Add a transaction to abort the outstanding DMA continuation */
+static int abort_dma_cont(struct qaic_device *qdev,
+		          struct wrapper_list *wrappers, u32 dma_chunk_id)
+{
+	struct _trans_dma_xfer *out_trans;
+	u32 size = sizeof(*out_trans);
+	struct wrapper_msg *wrapper;
+	struct wrapper_msg *w;
+	struct _msg *msg;
+
+	wrapper = list_first_entry(&wrappers->list, struct wrapper_msg, list);
+	msg = &wrapper->msg;
+
+	wrapper = add_wrapper(wrappers,
+			      offsetof(struct wrapper_msg, trans) + sizeof(*out_trans));
+
+	if (!wrapper) {
+		trace_encode_error(qdev, "abort dma cont alloc fail");
+		return -ENOMEM;
+	}
+
+	/* Remove all but the first wrapper which has the msg header */
+	list_for_each_entry_safe(wrapper, w, &wrappers->list, list)
+		if (!list_is_first(&wrapper->list, &wrappers->list))
+			kref_put(&wrapper->ref_count, free_wrapper);
+
+	out_trans = (struct _trans_dma_xfer *)&wrapper->trans;
+	out_trans->hdr.type = cpu_to_le32(TRANS_DMA_XFER_TO_DEV);
+	out_trans->hdr.len = cpu_to_le32(size);
+	out_trans->tag = cpu_to_le32(0);
+	out_trans->count = cpu_to_le32(0);
+	out_trans->dma_chunk_id = cpu_to_le32(dma_chunk_id);
+
+	msg->hdr.len = size + sizeof(*msg);
+	msg->hdr.count = 1;
+	wrapper->len = size;
+
+	return 0;
+}
+
 static struct wrapper_list *alloc_wrapper_list(void)
 {
 	struct wrapper_list *wrappers;
@@ -960,77 +1047,63 @@ static struct wrapper_list *alloc_wrapper_list(void)
 	return wrappers;
 }
 
-static int qaic_manage(struct qaic_device *qdev, struct qaic_user *usr,
-		       struct qaic_manage_msg *user_msg)
+static int __qaic_manage(struct qaic_device *qdev, struct qaic_user *usr,
+		         struct qaic_manage_msg *user_msg,
+			 struct ioctl_resources *resources,
+			 struct _msg **rsp)
 {
-	struct ioctl_resources resources;
 	struct wrapper_list *wrappers;
 	struct wrapper_msg *wrapper;
 	struct wrapper_msg *w;
 	bool all_done = false;
 	struct _msg *msg;
-	struct _msg *rsp;
 	int ret;
-
-	INIT_LIST_HEAD(&resources.dma_xfers);
-	resources.buf = NULL;
-
-	if (user_msg->len > QAIC_MANAGE_MAX_MSG_LENGTH ||
-	    user_msg->count >
-	    QAIC_MANAGE_MAX_MSG_LENGTH / sizeof(struct qaic_manage_trans_hdr)) {
-		trace_manage_error(qdev, usr, "msg from userspace too long or too many transactions");
-		ret = -EINVAL;
-		goto out;
-	}
 
 	wrappers = alloc_wrapper_list();
 	if (!wrappers) {
 		trace_manage_error(qdev, usr, "unable to alloc wrappers");
-		ret = -ENOMEM;
-		goto out;
+		return -ENOMEM;
 	}
 
 	wrapper = add_wrapper(wrappers, sizeof(*wrapper));
 	if (!wrapper) {
-		trace_manage_error(qdev, usr, "unable to alloc for encode");
-		ret = -ENOMEM;
+		trace_manage_error(qdev, usr, "__qaic_manage failed to add wrapper");
 		kfree(wrappers);
-		goto out;
+		return -ENOMEM;
 	}
 
 	msg = &wrapper->msg;
 	wrapper->len = sizeof(*msg);
 
-	ret = encode_message(qdev, user_msg, wrappers, &resources, usr);
+	ret = encode_message(qdev, user_msg, wrappers, resources, usr);
+	if (ret && resources->dma_chunk_id)
+		ret = abort_dma_cont(qdev, wrappers, resources->dma_chunk_id);
 	if (ret)
 		goto encode_failed;
 
 	ret = mutex_lock_interruptible(&qdev->cntl_mutex);
 	if (ret)
 		goto lock_failed;
+
 	msg->hdr.magic_number = MANAGE_MAGIC_NUMBER;
 	msg->hdr.sequence_number = cpu_to_le32(qdev->next_seq_num++);
 	msg->hdr.len = cpu_to_le32(msg->hdr.len);
 	msg->hdr.count = cpu_to_le32(msg->hdr.count);
+
 	if (usr)
 		msg->hdr.handle = cpu_to_le32(usr->handle);
 	else
 		msg->hdr.handle = 0;
 
 	/* msg_xfer releases the mutex */
-	rsp = msg_xfer(qdev, wrappers, qdev->next_seq_num - 1, false);
-	if (IS_ERR(rsp)) {
+	*rsp = msg_xfer(qdev, wrappers, qdev->next_seq_num - 1, false);
+	if (IS_ERR(*rsp)) {
 		trace_manage_error(qdev, usr, "failed to xmit to device");
-		ret = PTR_ERR(rsp);
-		goto lock_failed;
+		ret = PTR_ERR(*rsp);
 	}
 
-	ret = decode_message(qdev, user_msg, rsp, &resources, usr);
-
-	kfree(rsp);
 lock_failed:
-	free_dma_xfers(qdev, &resources);
-	free_dbc_buf(qdev, &resources);
+	free_dma_xfers(qdev, resources);
 encode_failed:
 	spin_lock(&wrappers->lock);
 	list_for_each_entry_safe(wrapper, w, &wrappers->list, list)
@@ -1039,7 +1112,55 @@ encode_failed:
 	spin_unlock(&wrappers->lock);
 	if (all_done)
 		kfree(wrappers);
-out:
+
+	return ret;
+}
+
+static int qaic_manage(struct qaic_device *qdev, struct qaic_user *usr,
+		       struct qaic_manage_msg *user_msg)
+{
+	struct _trans_dma_xfer_cont *dma_cont = NULL;
+	struct ioctl_resources resources;
+	struct _msg *rsp;
+	int ret;
+
+	memset(&resources, 0, sizeof(struct ioctl_resources));
+
+	INIT_LIST_HEAD(&resources.dma_xfers);
+
+	if (user_msg->len > QAIC_MANAGE_MAX_MSG_LENGTH ||
+	    user_msg->count > QAIC_MANAGE_MAX_MSG_LENGTH / sizeof(struct qaic_manage_trans_hdr)) {
+		trace_manage_error(qdev, usr, "msg from userspace too long or too many transactions");
+		return -EINVAL;
+	}
+
+dma_xfer_continue:
+	ret = __qaic_manage(qdev, usr, user_msg, &resources, &rsp);
+	if (ret)
+		return ret;
+	/* dma_cont should be the only transaction if present */
+	if (rsp->hdr.count == 1) {
+		dma_cont = (struct _trans_dma_xfer_cont *)rsp->data;
+		if (dma_cont->hdr.type != TRANS_DMA_XFER_CONT)
+			dma_cont = NULL;
+	}
+	if (dma_cont) {
+		if (dma_cont->dma_chunk_id == resources.dma_chunk_id &&
+		    dma_cont->xferred_size == resources.xferred_dma_size) {
+			kfree(rsp);
+			goto dma_xfer_continue;
+		}
+
+		trace_manage_error(qdev, usr, "wrong size/id for DMA continuation");
+		ret = -EINVAL;
+		goto dma_cont_failed;
+	}
+
+	ret = decode_message(qdev, user_msg, rsp, &resources, usr);
+
+dma_cont_failed:
+	free_dbc_buf(qdev, &resources);
+	kfree(rsp);
 	return ret;
 }
 

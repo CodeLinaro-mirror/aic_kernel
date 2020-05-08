@@ -93,6 +93,7 @@ static int qaic_device_open(struct inode *inode, struct file *filp)
 
 	usr->handle = current->pid;
 	usr->qdev = qdev;
+	atomic_set(&usr->chunk_id, 0);
 	init_srcu_struct(&usr->qdev_lock);
 	kref_init(&usr->ref_count);
 
@@ -730,4 +731,4 @@ module_exit(qaic_exit);
 MODULE_AUTHOR("Qualcomm Cloud AI 100 Accelerator Kernel Driver Team");
 MODULE_DESCRIPTION("Qualcomm Cloud 100 AI Accelerators Driver");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("5.0.0"); /* MAJOR.MINOR.PATCH */
+MODULE_VERSION("5.1.0"); /* MAJOR.MINOR.PATCH */
