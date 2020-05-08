@@ -33,8 +33,8 @@
 #define QAIC_NAME			"Qualcomm Cloud AI 100"
 #define QAIC_MAX_MINORS			256
 
-static u16 cntl_major;
-static u16 cntl_minor = 3;
+static u16 cntl_major = 1;
+static u16 cntl_minor = 0;
 static int qaic_major;
 static struct class *qaic_class;
 static DEFINE_IDR(qaic_devs);
@@ -183,7 +183,7 @@ static long qaic_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	switch (nr) {
 	case QAIC_IOCTL_MANAGE_NR:
 		if (_IOC_DIR(cmd) != (_IOC_READ | _IOC_WRITE) ||
-		    _IOC_SIZE(cmd) != sizeof(struct qaic_manage_msg)) {
+		    _IOC_SIZE(cmd) < sizeof(struct qaic_manage_msg)) {
 			ret = -EINVAL;
 			break;
 		}
@@ -730,4 +730,4 @@ module_exit(qaic_exit);
 MODULE_AUTHOR("Qualcomm Cloud AI 100 Accelerator Kernel Driver Team");
 MODULE_DESCRIPTION("Qualcomm Cloud 100 AI Accelerators Driver");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("4.0.2"); /* MAJOR.MINOR.PATCH */
+MODULE_VERSION("5.0.0"); /* MAJOR.MINOR.PATCH */

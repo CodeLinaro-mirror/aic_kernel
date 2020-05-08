@@ -9,7 +9,8 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define QAIC_MANAGE_MAX_MSG_LENGTH 16364
+/* The length includes len and count fields of qaic_manage_msg */
+#define QAIC_MANAGE_MAX_MSG_LENGTH SZ_4K
 
 enum qaic_sem_flags {
 	SEM_INSYNCFENCE =	0x1,
@@ -99,7 +100,7 @@ struct qaic_manage_trans_status_from_dev {
 struct qaic_manage_msg {
 	__u32 len;   /* Length of valid data - ie sum of all transactions */
 	__u32 count; /* Number of transactions in message */
-	__u8 data[QAIC_MANAGE_MAX_MSG_LENGTH];
+	__u8 data[];
 };
 
 struct qaic_mem_req {
