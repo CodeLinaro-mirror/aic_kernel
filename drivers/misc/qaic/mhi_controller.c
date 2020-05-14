@@ -424,7 +424,7 @@ struct mhi_controller *qaic_mhi_register_controller(struct pci_dev *pci_dev,
 	 * rollover.
 	 */
 	mhi_cntl->iova_start = 0;
-	mhi_cntl->iova_stop = U64_MAX - 1;
+	mhi_cntl->iova_stop = PHYS_ADDR_MAX - 1;
 
 	mhi_cntl->status_cb = mhi_status_cb;
 	mhi_cntl->runtime_get = mhi_runtime_get;
