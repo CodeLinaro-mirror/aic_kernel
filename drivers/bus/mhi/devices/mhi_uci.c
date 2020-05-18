@@ -28,6 +28,7 @@ struct uci_chan {
 	struct list_head pending; /* user space waiting to read */
 	struct uci_buf *cur_buf; /* current buffer user space reading */
 	size_t rx_size;
+	struct mutex read_lock;
 };
 
 struct uci_buf {
@@ -274,11 +275,12 @@ static ssize_t mhi_uci_read(struct file *file,
 	if (!buf)
 		return -EINVAL;
 
+	mutex_lock(&uci_chan->read_lock);
 	/* confirm channel is active */
 	spin_lock_bh(&uci_chan->lock);
 	if (!uci_dev->enabled) {
-		spin_unlock_bh(&uci_chan->lock);
-		return -ERESTARTSYS;
+		ret = -ERESTARTSYS;
+		goto unlock_spinlock;
 	}
 
 	/* No data available to read, wait */
@@ -288,13 +290,15 @@ static ssize_t mhi_uci_read(struct file *file,
 		ret = wait_event_interruptible(uci_chan->wq,
 				(!uci_dev->enabled ||
 				 !list_empty(&uci_chan->pending)));
-		if (ret == -ERESTARTSYS)
-			return -ERESTARTSYS;
+		if (ret == -ERESTARTSYS) {
+			ret = -ERESTARTSYS;
+			goto unlock_mutex;
+		}
 
 		spin_lock_bh(&uci_chan->lock);
 		if (!uci_dev->enabled) {
 			ret = -ERESTARTSYS;
-			goto read_error;
+			goto unlock_spinlock;
 		}
 	}
 
@@ -304,7 +308,7 @@ static ssize_t mhi_uci_read(struct file *file,
 						   struct uci_buf, node);
 		if (unlikely(!uci_buf)) {
 			ret = -EIO;
-			goto read_error;
+			goto unlock_spinlock;
 		}
 
 		list_del(&uci_buf->node);
@@ -320,7 +324,7 @@ static ssize_t mhi_uci_read(struct file *file,
 	ptr = uci_buf->data + (uci_buf->len - uci_chan->rx_size);
 	ret = copy_to_user(buf, ptr, to_copy);
 	if (ret)
-		return ret;
+		goto unlock_spinlock;
 
 	uci_chan->rx_size -= to_copy;
 
@@ -338,16 +342,20 @@ static ssize_t mhi_uci_read(struct file *file,
 
 		if (ret) {
 			kfree(uci_buf->data);
-			goto read_error;
+			goto unlock_spinlock;
 		}
 
 		spin_unlock_bh(&uci_chan->lock);
 	}
 
+	mutex_unlock(&uci_chan->read_lock);
 	return to_copy;
 
-read_error:
+unlock_spinlock:
 	spin_unlock_bh(&uci_chan->lock);
+
+unlock_mutex:
+	mutex_unlock(&uci_chan->read_lock);
 
 	return ret;
 }
@@ -493,6 +501,7 @@ static int mhi_uci_probe(struct mhi_device *mhi_dev,
 		spin_lock_init(&uci_chan->lock);
 		init_waitqueue_head(&uci_chan->wq);
 		INIT_LIST_HEAD(&uci_chan->pending);
+		mutex_init(&uci_chan->read_lock);
 	}
 
 	uci_dev->mtu = min_t(size_t, id->driver_data, mhi_dev->mtu);
