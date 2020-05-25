@@ -916,20 +916,16 @@ out:
 	return ret;
 }
 
-static int commit_execute(struct qaic_device *qdev, struct mem_handle *mem,
-			  u32 dbc_id)
+static inline int copy_exec_reqs(struct qaic_device *qdev,
+				 struct mem_handle *mem, u32 dbc_id, u32 head,
+				 u32 *ptail)
 {
 	struct dma_bridge_chan *dbc = &qdev->dbc[dbc_id];
-	u32 head = le32_to_cpu(__raw_readl(dbc->dbc_base + REQHP_OFF));
-	u32 tail = le32_to_cpu(__raw_readl(dbc->dbc_base + REQTP_OFF));
-	u32 avail = head - tail;
 	struct dbc_req *reqs = mem->reqs;
-	bool two_copy = tail + mem->nents > dbc->nelem;
+	u32 tail = *ptail;
+	u32 avail;
 
-	if (head == U32_MAX || tail == U32_MAX)
-		/* PCI link error */
-		return -ENODEV;
-
+	avail = head - tail;
 	if (head <= tail)
 		avail += dbc->nelem;
 
@@ -938,7 +934,7 @@ static int commit_execute(struct qaic_device *qdev, struct mem_handle *mem,
 	if (avail < mem->nents)
 		return -EAGAIN;
 
-	if (two_copy) {
+	if (tail + mem->nents > dbc->nelem) {
 		avail = dbc->nelem - tail;
 		avail = min_t(u32, avail, mem->nents);
 		memcpy(dbc->req_q_base + tail * get_dbc_req_elem_size(),
@@ -954,8 +950,8 @@ static int commit_execute(struct qaic_device *qdev, struct mem_handle *mem,
 
 	init_completion(&mem->xfer_done);
 	list_add_tail(&mem->list, &dbc->xfer_list);
-	tail = (tail + mem->nents) % dbc->nelem;
-	__raw_writel(cpu_to_le32(tail), dbc->dbc_base + REQTP_OFF);
+	*ptail = (tail + mem->nents) % dbc->nelem;
+
 	return 0;
 }
 
@@ -972,6 +968,8 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	int dbc_id;
 	int rcu_id;
 	int count;
+	u32 head;
+	u32 tail;
 	int ret;
 	int i, j;
 
@@ -1018,6 +1016,21 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 		goto release_rcu;
 	}
 
+	ret = mutex_lock_interruptible(&qdev->dbc[hdr->dbc_id].mem_lock);
+	if (ret)
+		goto release_rcu;
+
+	head = le32_to_cpu(__raw_readl(qdev->dbc[hdr->dbc_id].dbc_base +
+			   REQHP_OFF));
+	tail = le32_to_cpu(__raw_readl(qdev->dbc[hdr->dbc_id].dbc_base +
+			   REQTP_OFF));
+
+	if (head == U32_MAX || tail == U32_MAX) {
+		/* PCI link error */
+		ret = -ENODEV;
+		goto unlock_mem_lock;
+	}
+
 	for (i = 0; i < count; i++) {
 		handle = exec[i].handle & ~PGOFF_DBC_MASK;
 		dbc_id = (exec[i].handle & PGOFF_DBC_MASK) >> PGOFF_DBC_SHIFT;
@@ -1031,26 +1044,21 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 
 		if (dbc_id != hdr->dbc_id) {
 			ret = -EINVAL;
-			goto release_rcu;
+			goto unlock_mem_lock;
 		}
 
-		ret = mutex_lock_interruptible(&qdev->dbc[dbc_id].mem_lock);
-		if (ret)
-			goto release_rcu;
 		mem = idr_find(&qdev->dbc[dbc_id].mem_handles, handle);
 		if (!mem) {
 			ret = -ENODEV;
-			mutex_unlock(&qdev->dbc[dbc_id].mem_lock);
-			goto release_rcu;
+			goto unlock_mem_lock;
 		}
 		/* prevent free_handle from taking the memory from under us */
 		kref_get(&mem->ref_count);
-		mutex_unlock(&qdev->dbc[dbc_id].mem_lock);
 
 		if (mem->dir != exec[i].dir) {
 			ret = -EINVAL;
 			kref_put(&mem->ref_count, free_handle_mem);
-			goto release_rcu;
+			goto unlock_mem_lock;
 		}
 
 		spin_lock_irqsave(&qdev->dbc[dbc_id].xfer_lock, flags);
@@ -1065,14 +1073,14 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 		if (queued) {
 			ret = -EINVAL;
 			kref_put(&mem->ref_count, free_handle_mem);
-			goto release_rcu;
+			goto unlock_mem_lock;
 		}
 
 		dma_sync_sg_for_device(&qdev->pdev->dev, mem->sgt->sgl,
 				       mem->sgt->nents, mem->dir);
 
 		spin_lock_irqsave(&qdev->dbc[dbc_id].xfer_lock, flags);
-		ret = commit_execute(qdev, mem, dbc_id);
+		ret = copy_exec_reqs(qdev, mem, dbc_id, head, &tail);
 		spin_unlock_irqrestore(&qdev->dbc[dbc_id].xfer_lock, flags);
 		if (ret) {
 			mem->queued = false;
@@ -1081,11 +1089,23 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 		}
 	}
 
-	goto release_rcu;
+	__raw_writel(cpu_to_le32(tail), qdev->dbc[hdr->dbc_id].dbc_base +
+		     REQTP_OFF);
+
+	goto unlock_mem_lock;
 
 sync_to_cpu:
 	dma_sync_sg_for_cpu(&qdev->pdev->dev, mem->sgt->sgl, mem->sgt->nents,
 			    mem->dir);
+	for (j = i - 1; j >= 0; j--) {
+		mem = list_last_entry(&qdev->dbc[hdr->dbc_id].xfer_list,
+				      struct mem_handle, list);
+		dma_sync_sg_for_cpu(&qdev->pdev->dev, mem->sgt->sgl,
+				    mem->sgt->nents, mem->dir);
+		list_del(&mem->list);
+	}
+unlock_mem_lock:
+	mutex_unlock(&qdev->dbc[hdr->dbc_id].mem_lock);
 release_rcu:
 	srcu_read_unlock(&qdev->dbc[hdr->dbc_id].ch_lock, rcu_id);
 free_exec:
