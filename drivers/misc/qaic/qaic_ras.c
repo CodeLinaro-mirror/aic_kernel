@@ -75,7 +75,6 @@ struct ras_data {
 	u32 ue_count;
 	u32 intr_num;
 	u8  syndrome[64];
-	u8  irq_status;
 } __packed;
 
 struct soc_mem_syndrome {
@@ -90,9 +89,8 @@ struct nsp_mem_syndrome {
 struct ddr_syndrome {
 	u16 instance;
 	u16 err_type;
-	u8  count;
-	u8  irq_status;
-	u16 amid;
+	u32 count;
+	u32 irq_status;
 	u32 data_31_0[2];
 	u32 data_63_32[2];
 	u32 data_95_64[2];
@@ -255,14 +253,13 @@ static void decode_ras_msg(struct qaic_device *qdev, struct ras_data *msg)
 		}
 		break;
 	case DDR:
-		pci_printk(level, qdev->pdev, "RAS event.\nClass:%s\nDescription:%s %s %s\nSyndrome:\n    Instance %d\n    Count %d\n    AMID 0x%x\n    Data 31_0 0x%x 0x%x\n    Data 63_32 0x%x 0x%x\n    Data 95_64 0x%x 0x%x\n    Data 127_96 0x%x 0x%x\n    Parity bits 0x%x\n    Address msb 0x%x\n    Address lsb 0x%x\n",
+		pci_printk(level, qdev->pdev, "RAS event.\nClass:%s\nDescription:%s %s %s\nSyndrome:\n    Instance %d\n    Count %d\n    Data 31_0 0x%x 0x%x\n    Data 63_32 0x%x 0x%x\n    Data 95_64 0x%x 0x%x\n    Data 127_96 0x%x 0x%x\n    Parity bits 0x%x\n    Address msb 0x%x\n    Address lsb 0x%x\n",
 			   err_class_str[msg->err_type],
 			   err_type_str[msg->err_type],
 			   "error from",
 			   err_src_str[msg->source],
 			   ddr_syndrome->instance,
 			   ddr_syndrome->count,
-			   ddr_syndrome->amid,
 			   ddr_syndrome->data_31_0[1],
 			   ddr_syndrome->data_31_0[0],
 			   ddr_syndrome->data_63_32[1],
