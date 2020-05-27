@@ -3,6 +3,7 @@
 /* Copyright (c) 2020, The Linux Foundation. All rights reserved. */
 
 #include <asm/byteorder.h>
+#include <linux/device.h>
 #include <linux/kernel.h>
 #include <linux/mhi.h>
 
@@ -356,7 +357,70 @@ static void decode_ras_msg(struct qaic_device *qdev, struct ras_data *msg)
 	/* Uncorrectable errors are fatal */
 	if (msg->err_type == UE)
 		mhi_do_soc_reset(qdev->mhi_cntl);
+
+	switch (msg->err_type) {
+	case CE:
+		if (qdev->ce_count != UINT_MAX)
+			qdev->ce_count++;
+		break;
+	case UE:
+		if (qdev->ce_count != UINT_MAX)
+			qdev->ue_count++;
+		break;
+	case UE_NF:
+		if (qdev->ce_count != UINT_MAX)
+			qdev->ue_nf_count++;
+		break;
+	default:
+		/* not possible */
+		break;
+	}
 }
+
+static ssize_t ce_count_show(struct device *dev,
+			     struct device_attribute *attr,
+			     char *buf)
+{
+	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
+	struct qaic_device *qdev = pci_get_drvdata(pdev);
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", qdev->ce_count);
+}
+
+static ssize_t ue_count_show(struct device *dev,
+			     struct device_attribute *attr,
+			     char *buf)
+{
+	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
+	struct qaic_device *qdev = pci_get_drvdata(pdev);
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", qdev->ue_count);
+}
+
+static ssize_t ue_nonfatal_count_show(struct device *dev,
+			     struct device_attribute *attr,
+			     char *buf)
+{
+	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
+	struct qaic_device *qdev = pci_get_drvdata(pdev);
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", qdev->ue_nf_count);
+}
+
+DEVICE_ATTR_RO(ce_count);
+DEVICE_ATTR_RO(ue_count);
+DEVICE_ATTR_RO(ue_nonfatal_count);
+
+static struct attribute *ras_attrs[] = {
+	&dev_attr_ce_count.attr,
+	&dev_attr_ue_count.attr,
+	&dev_attr_ue_nonfatal_count.attr,
+	NULL,
+};
+
+static struct attribute_group ras_group = {
+	.attrs = ras_attrs,
+};
 
 static int qaic_ras_mhi_probe(struct mhi_device *mhi_dev,
 			      const struct mhi_device_id *id)
@@ -388,6 +452,10 @@ static int qaic_ras_mhi_probe(struct mhi_device *mhi_dev,
 		return ret;
 	}
 
+	ret = device_add_group(&qdev->pdev->dev, &ras_group);
+	if (ret)
+		pci_dbg(qdev->pdev, "ras add sysfs failed %d\n", ret);
+
 	return 0;
 }
 
@@ -398,6 +466,7 @@ static void qaic_ras_mhi_remove(struct mhi_device *mhi_dev)
 	qdev = mhi_device_get_devdata(mhi_dev);
 	mhi_unprepare_from_transfer(qdev->ras_ch);
 	qdev->ras_ch = NULL;
+	device_remove_group(&qdev->pdev->dev, &ras_group);
 }
 
 static void qaic_ras_mhi_ul_xfer_cb(struct mhi_device *mhi_dev,

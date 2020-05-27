@@ -83,6 +83,9 @@ struct qaic_device {
 	bool			tele_lost_buf;
 	struct workqueue_struct	*tele_wq;
 	struct mhi_device	*ras_ch;
+	unsigned int		ce_count;
+	unsigned int		ue_count;
+	unsigned int		ue_nf_count;
 };
 
 int get_dbc_req_elem_size(void);
