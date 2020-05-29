@@ -105,8 +105,7 @@ struct qaic_manage_msg {
 struct qaic_mem_req {
 	__u64 handle; /* 0 to alloc/import, or a valid handle to free */
 	__u64 size;   /* size to alloc, will be rounded to PAGE_SIZE */
-	__u32 dir;    /* direction of data: 0 = bidirectional data,
-			 1 = to device, 2 = from device */
+	__u32 dir;    /* direction of data: 1 = to device, 2 = from device */
 	__u32 dbc_id; /* Identifier of assigned DMA Bridge channel */
 	__u64 offset; /* offset within dmabuf FD */
 	__u64 buf_fd; /* A valid Buf FD if its a dmabuf import,

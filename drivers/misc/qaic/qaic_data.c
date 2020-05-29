@@ -137,8 +137,7 @@ static int alloc_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
 	int nents;
 	int ret;
 
-	if (!(req->dir == DMA_TO_DEVICE || req->dir == DMA_FROM_DEVICE ||
-	      req->dir == DMA_BIDIRECTIONAL)) {
+	if (!(req->dir == DMA_TO_DEVICE || req->dir == DMA_FROM_DEVICE)) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -226,7 +225,7 @@ static int alloc_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
 		goto free_partial_alloc;
 	}
 
-	if (req->dir == DMA_TO_DEVICE || req->dir == DMA_BIDIRECTIONAL)
+	if (req->dir == DMA_TO_DEVICE)
 		dma_sync_sg_for_cpu(&qdev->pdev->dev, sgt->sgl, sgt->nents,
 				    req->dir);
 
@@ -938,7 +937,7 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	kref_get(&mem->ref_count);
 	mutex_unlock(&qdev->dbc[exec->dbc_id].mem_lock);
 
-	if (mem->dir != DMA_BIDIRECTIONAL && mem->dir != exec->dir) {
+	if (mem->dir != exec->dir) {
 		ret = -EINVAL;
 		kref_put(&mem->ref_count, free_handle_mem);
 		goto release_rcu;
