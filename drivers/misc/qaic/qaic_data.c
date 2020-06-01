@@ -242,6 +242,8 @@ static int alloc_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
 	mem->queued = false;
 	mem->dma_buf = NULL;
 	mem->dbc_id = req->dbc_id;
+	init_completion(&mem->xfer_done);
+	complete_all(&mem->xfer_done);
 
 	ret = mutex_lock_interruptible(&qdev->dbc[req->dbc_id].mem_lock);
 	if (ret)
@@ -470,6 +472,8 @@ static int map_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
 	mem->queued = false;
 	mem->dma_buf = dma_handle;
 	mem->dbc_id = req->dbc_id;
+	init_completion(&mem->xfer_done);
+	complete_all(&mem->xfer_done);
 
 	ret = mutex_lock_interruptible(&dbc->mem_lock);
 	if (ret)
