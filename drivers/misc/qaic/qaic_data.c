@@ -202,7 +202,8 @@ static int alloc_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
 			max_order = order;
 		}
 
-		if (reserve_pages(page_to_pfn(page), 1 << order, true))
+		ret = reserve_pages(page_to_pfn(page), 1 << order, true);
+		if (ret)
 			goto free_partial_alloc;
 
 		sg_set_page(sg, page, PAGE_SIZE << order, 0);
@@ -366,7 +367,7 @@ static int map_handle(struct qaic_device *qdev, struct qaic_mem_req *req)
 {
 	struct dma_bridge_chan *dbc = &qdev->dbc[req->dbc_id];
 	struct scatterlist *sg, *sgn, *sgf, *sgl;
-	int total_len, len, nents, offf, offl;
+	int total_len, len, nents, offf = 0, offl = 0;
 	struct dma_buf_handle *dma_handle;
 	struct mem_handle *mem;
 	struct sg_table *sgt;
