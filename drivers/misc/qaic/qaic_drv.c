@@ -447,6 +447,8 @@ static int qaic_pci_probe(struct pci_dev *pdev,
 	mutex_init(&qdev->users_mutex);
 	mutex_init(&qdev->tele_mutex);
 	INIT_LIST_HEAD(&qdev->tele_xfer_list);
+	INIT_LIST_HEAD(&qdev->bootlog);
+	mutex_init(&qdev->bootlog_mutex);
 	for (i = 0; i < QAIC_NUM_DBC; ++i) {
 		mutex_init(&qdev->dbc[i].mem_lock);
 		mutex_init(&qdev->dbc[i].handle_lock);
@@ -732,4 +734,4 @@ module_exit(qaic_exit);
 MODULE_AUTHOR("Qualcomm Cloud AI 100 Accelerator Kernel Driver Team");
 MODULE_DESCRIPTION("Qualcomm Cloud 100 AI Accelerators Driver");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("8.0.0"); /* MAJOR.MINOR.PATCH */
+MODULE_VERSION("8.0.1"); /* MAJOR.MINOR.PATCH */

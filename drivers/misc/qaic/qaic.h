@@ -90,6 +90,10 @@ struct qaic_device {
 	unsigned int		ce_count;
 	unsigned int		ue_count;
 	unsigned int		ue_nf_count;
+	struct list_head	bootlog;
+	struct mhi_device	*bootlog_ch;
+	struct workqueue_struct	*bootlog_wq;
+	struct mutex		bootlog_mutex;
 };
 
 int get_dbc_req_elem_size(void);
