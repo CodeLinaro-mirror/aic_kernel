@@ -1200,7 +1200,7 @@ static inline int copy_exec_reqs(struct qaic_device *qdev,
 		       reqs, sizeof(*reqs) * mem->nents);
 	}
 
-	init_completion(&mem->xfer_done);
+	reinit_completion(&mem->xfer_done);
 	list_add_tail(&mem->list, &dbc->xfer_list);
 	*ptail = (tail + mem->nents) % dbc->nelem;
 
