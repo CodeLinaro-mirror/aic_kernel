@@ -117,9 +117,9 @@ struct qaic_sem { /* semaphore command */
 
 struct qaic_mem_req_entry {
 	__u64 handle; /* 0 to alloc/import, or a valid handle to free */
-	__u64 size;   /* size to alloc, will be rounded to PAGE_SIZE */
+	__u64 size;   /* size to alloc for this memory request */
 	__u32 dir;    /* direction of data: 1 = to device, 2 = from device */
-	__u32 resv;   /* Align with 64 bit */
+	__u32 cont;   /* Next entry is part of same buffer */
 	struct qaic_sem	sem0;   /* Must be zero if not valid */
 	struct qaic_sem	sem1;   /* Must be zero if not valid */
 	struct qaic_sem	sem2;   /* Must be zero if not valid */
@@ -130,7 +130,8 @@ struct qaic_mem_req_entry {
 	__u32 db_len; /* doorbell length - 32, 16, or 8 bits. 0 means
 		       * doorbell is inactive
 		       */
-	__u64 offset; /* offset within dmabuf FD */
+	__u64 offset; /* offset from start of buffer*/
+	__u64 total_size;       /* total length of user buffer*/
 	__u64 buf_fd; /* A valid Buf FD if its a dmabuf import, else -1ULL) */
 };
 

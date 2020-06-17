@@ -43,9 +43,10 @@ struct dma_bridge_chan {
 	u32			total_size;
 	u32			nelem;
 	struct mutex		mem_lock;
-	struct mutex		dma_lock;
+	struct mutex		handle_lock;
 	struct idr		mem_handles;
 	struct idr		dma_handles;
+	struct idr		alloc_handles;
 	struct qaic_user	*usr;
 	u16			next_req_id;
 	void __iomem		*dbc_base;
