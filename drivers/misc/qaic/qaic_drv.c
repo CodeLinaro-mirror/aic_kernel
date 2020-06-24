@@ -350,11 +350,8 @@ static void qaic_mhi_remove(struct mhi_device *mhi_dev)
 {
 }
 
-void qaic_dev_reset_clean_local_state(struct qaic_device *qdev)
+static void qaic_notify_reset(struct qaic_device *qdev)
 {
-	struct qaic_user *usr;
-	struct qaic_user *u;
-	dev_t devno;
 	int i;
 
 	qdev->in_reset = true;
@@ -364,6 +361,16 @@ void qaic_dev_reset_clean_local_state(struct qaic_device *qdev)
 	for (i = 0; i < QAIC_NUM_DBC; ++i)
 		wakeup_dbc(qdev, i);
 	synchronize_srcu(&qdev->dev_lock);
+}
+
+void qaic_dev_reset_clean_local_state(struct qaic_device *qdev)
+{
+	struct qaic_user *usr;
+	struct qaic_user *u;
+	dev_t devno;
+	int i;
+
+	qaic_notify_reset(qdev);
 
 	/*
 	 * while the usr still has access to the qdev, use the mutex to add
@@ -610,8 +617,9 @@ static void qaic_pci_reset_prepare(struct pci_dev *pdev)
 {
 	struct qaic_device *qdev = pci_get_drvdata(pdev);
 
+	qaic_notify_reset(qdev);
+	qaic_mhi_start_reset(qdev->mhi_cntl);
 	qaic_dev_reset_clean_local_state(qdev);
-	qaic_mhi_link_down(qdev->mhi_cntl);
 }
 
 static void qaic_pci_reset_done(struct pci_dev *pdev)
@@ -619,7 +627,7 @@ static void qaic_pci_reset_done(struct pci_dev *pdev)
 	struct qaic_device *qdev = pci_get_drvdata(pdev);
 
 	qdev->in_reset = false;
-	qaic_mhi_link_up(qdev->mhi_cntl);
+	qaic_mhi_reset_done(qdev->mhi_cntl);
 }
 
 static const struct mhi_device_id qaic_mhi_match_table[] = {
@@ -734,4 +742,4 @@ module_exit(qaic_exit);
 MODULE_AUTHOR("Qualcomm Cloud AI 100 Accelerator Kernel Driver Team");
 MODULE_DESCRIPTION("Qualcomm Cloud 100 AI Accelerators Driver");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("8.0.1"); /* MAJOR.MINOR.PATCH */
+MODULE_VERSION("8.0.2"); /* MAJOR.MINOR.PATCH */
