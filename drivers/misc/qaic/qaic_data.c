@@ -819,7 +819,7 @@ again:
 	while (i < count && req[i++].cont);
 
 	ret = alloc_one_sgt_handle(qdev, dbc_id, req[i-1].total_size,
-				   req[i].dir);
+				   req[i-1].dir);
 	if (ret < 0)
 		goto free_sgt_handle;
 
