@@ -548,8 +548,7 @@ static int encode_reqs(struct qaic_device *qdev, struct mem_handle *mem,
 }
 
 static int map_one_handle(struct qaic_device *qdev,
-			  struct qaic_mem_req_entry *req, u32 dbc_id,
-			  bool *prev_cont)
+			  struct qaic_mem_req_entry *req, u32 dbc_id)
 {
 	struct dma_bridge_chan *dbc = &qdev->dbc[dbc_id];
 	struct alloc_buf_handle *alloc_handle = NULL;
@@ -632,15 +631,10 @@ static int map_one_handle(struct qaic_device *qdev,
 	if (req->buf_fd != -1UL) {
 		mem->export = false;
 		mem->handle.dma = dma_handle;
-		if (*prev_cont)
-			kref_get(&dma_handle->ref_count);
 	} else {
 		mem->export = true;
 		mem->handle.alloc = alloc_handle;
-		if (*prev_cont)
-			kref_get(&alloc_handle->ref_count);
 	}
-	*prev_cont = req->cont;
 
 	return 0;
 
@@ -665,10 +659,9 @@ static int map_handles(struct qaic_device *qdev, struct qaic_mem_req_entry *req,
 		       int count, u32 dbc_id)
 {
 	int ret_free, ret, i, j;
-	bool prev_cont = false;
 
 	for (i = 0; i < count; i++) {
-		ret = map_one_handle(qdev, &req[i], dbc_id, &prev_cont);
+		ret = map_one_handle(qdev, &req[i], dbc_id);
 		if (ret)
 			goto free_handle;
 	}
@@ -686,7 +679,8 @@ free_handle:
 
 static int alloc_one_sgt_handle(struct qaic_device *qdev,
 				u32 dbc_id, u64 size,
-				enum dma_data_direction dir)
+				enum dma_data_direction dir,
+				struct alloc_buf_handle **handle)
 {
 	struct alloc_buf_handle *alloc_handle;
 	struct scatterlist *sg;
@@ -788,6 +782,8 @@ static int alloc_one_sgt_handle(struct qaic_device *qdev,
 	alloc_handle->handle = ret;
 	kref_init(&alloc_handle->ref_count);
 
+	*handle = alloc_handle;
+
 	return ret;
 
 free_partial_alloc:
@@ -804,6 +800,8 @@ free_sgt:
 free_alloc_handle:
 	kfree(alloc_handle);
 out:
+	*handle = NULL;
+
 	return ret;
 
 }
@@ -814,16 +812,20 @@ static int alloc_sgt(struct qaic_device *qdev, struct qaic_mem_req_entry *req,
 	struct alloc_buf_handle *alloc_handle;
 	int i = 0, j = 0, k;
 	int ret;
+	bool prev_cont = false;
 
 again:
 	while (i < count && req[i++].cont);
 
 	ret = alloc_one_sgt_handle(qdev, dbc_id, req[i-1].total_size,
-				   req[i-1].dir);
+				   req[i-1].dir, &alloc_handle);
 	if (ret < 0)
 		goto free_sgt_handle;
 
 	while (j < i) {
+		/* Increase usage count for continued requests */
+		if (j < i - 1)
+			kref_get(&alloc_handle->ref_count);
 		/* This is a temporary handle, will be overwritten */
 		req[j].handle = ret;
 		j++;
@@ -836,7 +838,7 @@ again:
 
 free_sgt_handle:
 	for (k = 0; k < j; k++) {
-		if (!req[k].cont) {
+		if (prev_cont) {
 			mutex_lock(&qdev->dbc[dbc_id].handle_lock);
 			alloc_handle =
 				idr_find(&qdev->dbc[dbc_id].alloc_handles,
@@ -844,6 +846,7 @@ free_sgt_handle:
 			mutex_unlock(&qdev->dbc[dbc_id].handle_lock);
 			kref_put(&alloc_handle->ref_count, free_alloc_handle);
 		}
+		prev_cont = req[k].cont;
 	}
 	return ret;
 }
@@ -927,6 +930,8 @@ static int find_sgt(struct qaic_device *qdev, struct qaic_mem_req_entry *req,
 			ret = alloc_dma_handle(qdev, &req[i], dbc_id);
 			if (ret)
 				goto free_dma_handles;
+		} else {
+			kref_get(&dma_handle->ref_count);
 		}
 		/* This is a temporary handle, will be overwritten */
 		req[i].handle = req[i].buf_fd;
