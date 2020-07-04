@@ -975,12 +975,20 @@ static bool invalid_sem(struct qaic_sem *sem)
 
 static int validate_req(struct qaic_mem_req_entry *req, int count)
 {
-	enum dma_data_direction dir = req[0].dir;
-	bool alloc_path = (req[0].handle == 0);
-	bool export = (req[0].buf_fd == -1UL);
-	u64 total_size = req[0].total_size;
-	bool last = true;
+	enum dma_data_direction dir;
+	bool alloc_path, export;
+	u64 total_size;
+	bool last;
 	int i;
+
+	if (!count)
+		return -EINVAL;
+
+	dir = req[0].dir;
+	alloc_path = (req[0].handle == 0);
+	export = (req[0].buf_fd == -1UL);
+	total_size = req[0].total_size;
+	last = true;
 
 	for (i = 0; i < count; i++) {
 		if (!(req[i].db_len == 32 || req[i].db_len == 16 ||
