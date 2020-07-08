@@ -1472,7 +1472,7 @@ int qaic_wait_exec_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 		goto free_wait;
 	}
 
-	if (wait->resv) {
+	if (wait->dbc_id > QAIC_NUM_DBC) {
 		ret = -EINVAL;
 		goto free_wait;
 	}
