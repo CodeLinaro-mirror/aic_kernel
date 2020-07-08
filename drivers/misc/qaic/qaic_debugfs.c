@@ -134,7 +134,7 @@ int qaic_debugfs_add_pci_device(struct pci_dev *pdev)
 		return -ENOENT;
 	}
 
-	snprintf(name, 16, "%04x:%02x.%02x.%x", pci_domain_nr(bus),
+	snprintf(name, 16, "%04x:%02x:%02x.%x", pci_domain_nr(bus),
 		 bus->number, PCI_SLOT(pdev->devfn),
 		 PCI_FUNC(pdev->devfn));
 
