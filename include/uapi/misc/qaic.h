@@ -11,8 +11,6 @@
 
 /* The length includes len and count fields of qaic_manage_msg */
 #define QAIC_MANAGE_MAX_MSG_LENGTH SZ_4K
-#define QAIC_MEM_IOCTL_MAX_SIZE SZ_4K
-#define QAIC_EXEC_IOCTL_MAX_SIZE SZ_4K
 
 enum qaic_sem_flags {
 	SEM_INSYNCFENCE =	0x1,
@@ -142,8 +140,7 @@ struct qaic_mem_req_hdr {
 
 struct qaic_mem_req {
 	struct qaic_mem_req_hdr hdr;
-	__u8 data[QAIC_MEM_IOCTL_MAX_SIZE - sizeof(struct qaic_mem_req_hdr)];
-		      /* qaic_mem_req_entry container */
+	__u8 data[0]; /* qaic_mem_req_entry container */
 };
 
 struct qaic_execute_entry {
@@ -159,8 +156,7 @@ struct qaic_execute_hdr {
 
 struct qaic_execute {
 	struct qaic_execute_hdr hdr;
-	__u8 data[QAIC_EXEC_IOCTL_MAX_SIZE - sizeof(struct qaic_execute_hdr)];
-		      /* qaic_execute_entry container */
+	__u8 data[0]; /* qaic_execute_entry container */
 };
 
 struct qaic_wait_exec {

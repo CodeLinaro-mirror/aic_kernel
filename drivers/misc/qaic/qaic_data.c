@@ -1059,12 +1059,6 @@ int qaic_mem_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 
 	count = hdr->count;
 
-	if (count > ((sizeof(struct qaic_mem_req) - sizeof(*hdr)) /
-			     sizeof(*req))) {
-		ret = -EINVAL;
-		goto free_hdr;
-	}
-
 	req = kcalloc(count, sizeof(*req), GFP_KERNEL);
 	if (!req) {
 		ret = -ENOMEM;
@@ -1255,12 +1249,6 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	}
 
 	count = hdr->count;
-
-	if (count > ((sizeof(struct qaic_execute) - sizeof(*hdr)) /
-			     sizeof(*exec))) {
-		ret = -EINVAL;
-		goto free_hdr;
-	}
 
 	exec = kcalloc(count, sizeof(*exec), GFP_KERNEL);
 	if (!exec) {
