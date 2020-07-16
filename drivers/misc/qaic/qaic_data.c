@@ -8,6 +8,7 @@
 #include <linux/idr.h>
 #include <linux/kref.h>
 #include <linux/list.h>
+#include <linux/mm.h>
 #include <linux/moduleparam.h>
 #include <linux/scatterlist.h>
 #include <linux/spinlock.h>
@@ -1117,6 +1118,25 @@ out:
 	return ret;
 }
 
+static void qaic_vma_open(struct vm_area_struct *vma)
+{
+	struct mem_handle *mem = vma->vm_private_data;
+
+	kref_get(&mem->ref_count);
+}
+
+static void qaic_vma_close(struct vm_area_struct *vma)
+{
+	struct mem_handle *mem = vma->vm_private_data;
+
+	kref_put(&mem->ref_count, free_handle_mem);
+}
+
+static struct vm_operations_struct qaic_vma_ops = {
+	.open = qaic_vma_open,
+	.close = qaic_vma_close,
+};
+
 int qaic_data_mmap(struct qaic_device *qdev, struct qaic_user *usr,
 		   struct vm_area_struct *vma)
 {
@@ -1168,6 +1188,10 @@ int qaic_data_mmap(struct qaic_device *qdev, struct qaic_user *usr,
 			offset += sg->length;
 		}
 	}
+
+	vma->vm_ops = &qaic_vma_ops;
+	vma->vm_private_data = mem;
+	kref_get(&mem->ref_count);
 
 release_rcu:
 	srcu_read_unlock(&qdev->dbc[dbc_id].ch_lock, rcu_id);
