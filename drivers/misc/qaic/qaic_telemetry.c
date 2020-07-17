@@ -248,6 +248,34 @@ static ssize_t throttle_percent_show(struct device *dev,
 
 SENSOR_DEVICE_ATTR_RO(throttle_percent, throttle_percent, 0);
 
+static ssize_t throttle_time_show(struct device *dev,
+				  struct device_attribute *a, char *buf)
+{
+	struct qaic_device *qdev = dev_get_drvdata(dev);
+	long val = 0;
+	int rcu_id;
+	int ret;
+
+	rcu_id = srcu_read_lock(&qdev->dev_lock);
+	if (qdev->in_reset) {
+		srcu_read_unlock(&qdev->dev_lock, rcu_id);
+		return -ENODEV;
+	}
+
+	ret = telemetry_request(qdev, CMD_THROTTLE_TIME, TYPE_READ, &val);
+
+	if (ret) {
+		srcu_read_unlock(&qdev->dev_lock, rcu_id);
+		return ret;
+	}
+
+	/* The time, in seconds, the device has been in a throttled state */
+	srcu_read_unlock(&qdev->dev_lock, rcu_id);
+	return sprintf(buf, "%ld\n", val);
+}
+
+SENSOR_DEVICE_ATTR_RO(throttle_time, throttle_time, 0);
+
 static ssize_t power_level_show(struct device *dev, struct device_attribute *a,
 				char *buf)
 {
@@ -315,6 +343,7 @@ SENSOR_DEVICE_ATTR_RW(power_level, power_level, 0);
 static struct attribute *power_attrs[] = {
 	&sensor_dev_attr_power_level.dev_attr.attr,
 	&sensor_dev_attr_throttle_percent.dev_attr.attr,
+	&sensor_dev_attr_throttle_time.dev_attr.attr,
 	NULL,
 };
 
