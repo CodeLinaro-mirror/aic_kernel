@@ -297,8 +297,8 @@ static int encode_dma(struct qaic_device *qdev, void *trans,
 	u64 dma_chunk_len;
 	struct _msg *msg;
 	void *boundary;
+	int nents_dma;
 	int nents;
-	int dmas;
 	u32 size;
 	int ret;
 	int i;
@@ -309,6 +309,14 @@ static int encode_dma(struct qaic_device *qdev, void *trans,
 	if (msg->hdr.len > (UINT_MAX - QAIC_MANAGE_EXT_MSG_LENGTH)) {
 		trace_encode_error(qdev, "msg hdr length too large");
 		ret = -EINVAL;
+		goto out;
+	}
+
+	/* There should be enough space to hold at least one ASP entry. */
+	if (msg->hdr.len + sizeof(*out_trans) + sizeof(*asp) >
+	    QAIC_MANAGE_EXT_MSG_LENGTH) {
+		trace_encode_error(qdev, "no space left in msg");
+		ret = -ENOMEM;
 		goto out;
 	}
 
@@ -384,30 +392,27 @@ static int encode_dma(struct qaic_device *qdev, void *trans,
 	 * dma_map_sg(), so lets see if that can be done.  It makes our message
 	 * more efficent.
 	 */
-	dmas = 0;
 	last = sgt->sgl;
+	nents_dma = nents;
+	size = QAIC_MANAGE_EXT_MSG_LENGTH - msg->hdr.len - sizeof(*out_trans);
 	for_each_sg(sgt->sgl, sg, nents, i) {
 		if (sg_dma_address(last) + sg_dma_len(last) !=
-		    sg_dma_address(sg))
-			dmas++;
+		    sg_dma_address(sg)) {
+			size -= sizeof(*asp);
+			/* Save 1K for possible follow-up transactions. */
+			if (size < SZ_1K) {
+				nents_dma = i;
+				break;
+			}
+		}
 		last = sg;
-	}
-
-	/*
-	 * Adjecent DMA entries could be stitched together. Use the dmas value
-	 * above to determine the overall size so far.
-	 */
-	size = msg->hdr.len + dmas * sizeof(*asp) + sizeof(*out_trans);
-	if (size > QAIC_MANAGE_EXT_MSG_LENGTH) {
-		trace_encode_error(qdev, "dma trans exceeds ext msg len");
-		ret = -ENOSPC;
-		goto dma_unmap;
 	}
 
 	trans_wrapper = add_wrapper(wrappers, QAIC_WRAPPER_MAX_SIZE);
 	if (!trans_wrapper) {
 		trace_encode_error(qdev, "encode dma alloc wrapper fail");
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto dma_unmap;
 	}
 	out_trans = (struct _trans_dma_xfer *)&trans_wrapper->trans;
 
@@ -419,7 +424,8 @@ static int encode_dma(struct qaic_device *qdev, void *trans,
 	dma_len = 0;
 	w = trans_wrapper;
 	dma_chunk_len = 0;
-	for_each_sg(sgt->sgl, sg, nents, dmas) {
+	/* Adjecent DMA entries could be stitched together. */
+	for_each_sg(sgt->sgl, sg, nents_dma, i) {
 		/* hit a discontinuity, finalize segment and start new one */
 		if (sg_dma_address(last) + sg_dma_len(last) !=
 		    sg_dma_address(sg)) {
@@ -467,7 +473,7 @@ static int encode_dma(struct qaic_device *qdev, void *trans,
 
 	if (resources->dma_chunk_id)
 		out_trans->dma_chunk_id = cpu_to_le32(resources->dma_chunk_id);
-	else if (need_pages > nr_pages) {
+	else if (need_pages > nr_pages || nents_dma < nents) {
 		while (resources->dma_chunk_id == 0)
 			resources->dma_chunk_id =
 				atomic_inc_return(&usr->chunk_id);
