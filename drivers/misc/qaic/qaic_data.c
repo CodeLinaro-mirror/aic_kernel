@@ -522,8 +522,9 @@ static int encode_reqs(struct qaic_device *qdev, struct mem_handle *mem,
 	mem->reqs[i].db_addr = db_addr;
 	mem->reqs[i].db_len = db_len;
 	mem->reqs[i].db_data = db_data;
-	req->sem0.flags |= (req->dir == DMA_TO_DEVICE ? SEM_INSYNCFENCE :
-							SEM_OUTSYNCFENCE);
+	if (i)
+		req->sem0.flags |= (req->dir == DMA_TO_DEVICE ?
+				    SEM_INSYNCFENCE : SEM_OUTSYNCFENCE);
 	mem->reqs[i].sem_cmd0 = cpu_to_le32(ENCODE_SEM(req->sem0.val,
 						       req->sem0.index,
 						       req->sem0.presync,
