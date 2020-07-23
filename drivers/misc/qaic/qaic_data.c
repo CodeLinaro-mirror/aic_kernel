@@ -522,7 +522,20 @@ static int encode_reqs(struct qaic_device *qdev, struct mem_handle *mem,
 	mem->reqs[i].db_addr = db_addr;
 	mem->reqs[i].db_len = db_len;
 	mem->reqs[i].db_data = db_data;
-	if (i)
+	/*
+	 * Add a fence if we have more than one request going to the hardware
+	 * representing the entirety of the user request, and the user request
+	 * has no presync condition.
+	 * Fences are expensive, so we try to avoid them.  We rely on the
+	 * hardware behavior to avoid needing one when there is a presync
+	 * condition.  When a presync exists, all requests for that same
+	 * presync will be queued into a fifo.  Thus, since we queue the
+	 * post xfer activity only on the last request we queue, the hardware
+	 * will ensure that the last queued request is processed last, thus
+	 * making sure the post xfer activity happens at the right time without
+	 * a fence.
+	 */
+	if (i && !presync_sem)
 		req->sem0.flags |= (req->dir == DMA_TO_DEVICE ?
 				    SEM_INSYNCFENCE : SEM_OUTSYNCFENCE);
 	mem->reqs[i].sem_cmd0 = cpu_to_le32(ENCODE_SEM(req->sem0.val,
