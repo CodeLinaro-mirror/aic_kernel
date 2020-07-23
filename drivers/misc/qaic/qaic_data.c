@@ -1029,6 +1029,10 @@ static int validate_req(struct qaic_mem_req_entry *req, int count)
 			total_size = req[i].total_size;
 			dir = req[i].dir;
 		}
+
+		if (req[i].offset + req[i].size > total_size)
+			return -EINVAL;
+
 		last = !req[i].cont;
 	}
 
