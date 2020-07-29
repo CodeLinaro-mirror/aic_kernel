@@ -39,6 +39,23 @@ TRACE_EVENT(qaic_ioctl,
 		__entry->nr, __entry->size, __entry->dir)
 );
 
+TRACE_EVENT(qaic_mhi_queue_error,
+        TP_PROTO(struct qaic_device *qdev, const char *msg, int ret),
+        TP_ARGS(qdev, msg, ret),
+        TP_STRUCT__entry(
+		__string(device, dev_name(&qdev->pdev->dev))
+		__string(msg, msg)
+		__field(int, ret)
+	),
+	TP_fast_assign(
+		__assign_str(device, dev_name(&qdev->pdev->dev))
+		__assign_str(msg, msg)
+		__entry->ret = ret;
+        ),
+        TP_printk("%s %s %d",
+                __get_str(device), __get_str(msg), __entry->ret)
+);
+
 DECLARE_EVENT_CLASS(qaic_manage_error,
         TP_PROTO(struct qaic_device *qdev, struct qaic_user *usr,
 		const char *msg),

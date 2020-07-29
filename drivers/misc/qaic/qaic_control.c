@@ -948,6 +948,8 @@ static void *msg_xfer(struct qaic_device *qdev, struct wrapper_list *wrappers,
 					 MHI_EOT);
 		if (ret) {
 			mutex_unlock(&qdev->cntl_mutex);
+			trace_qaic_mhi_queue_error(qdev, "mhi queue from device failed",
+						   ret);
 			return ERR_PTR(ret);
 		}
 	} else {
@@ -980,6 +982,8 @@ retry:
 			qdev->cntl_lost_buf = true;
 			kref_put(&w->ref_count, free_wrapper);
 			mutex_unlock(&qdev->cntl_mutex);
+			trace_qaic_mhi_queue_error(qdev, "mhi queue to device failed",
+						   ret);
 			return ERR_PTR(ret);
 		}
 	}
@@ -1007,6 +1011,8 @@ retry:
 	mutex_unlock(&qdev->cntl_mutex);
 
 	if (ret < 0) {
+		trace_qaic_mhi_queue_error(qdev, "No response element from device",
+				      ret);
 		kfree(elem.buf);
 		return ERR_PTR(ret);
 	}
