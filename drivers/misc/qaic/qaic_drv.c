@@ -164,7 +164,7 @@ static long qaic_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		return -ENODEV;
 	}
 
-	trace_qaic_ioctl(qdev, usr, cmd);
+	trace_qaic_ioctl(qdev, usr, cmd, true);
 
 	qdev_rcu_id = srcu_read_lock(&qdev->dev_lock);
 	if (qdev->in_reset) {
@@ -217,6 +217,7 @@ static long qaic_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	}
 
 	srcu_read_unlock(&qdev->dev_lock, qdev_rcu_id);
+	trace_qaic_ioctl(qdev, usr, cmd, false);
 	srcu_read_unlock(&usr->qdev_lock, usr_rcu_id);
 	return ret;
 }

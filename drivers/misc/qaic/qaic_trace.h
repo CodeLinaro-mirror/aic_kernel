@@ -14,8 +14,8 @@
 
 TRACE_EVENT(qaic_ioctl,
         TP_PROTO(struct qaic_device *qdev, struct qaic_user *usr,
-		unsigned int cmd),
-        TP_ARGS(qdev, usr, cmd),
+		unsigned int cmd, bool in),
+        TP_ARGS(qdev, usr, cmd, in),
         TP_STRUCT__entry(
 		__string(device, dev_name(&qdev->pdev->dev))
 		__field(unsigned int, user)
@@ -24,6 +24,7 @@ TRACE_EVENT(qaic_ioctl,
 		__field(unsigned int, nr)
 		__field(unsigned int, size)
 		__field(unsigned int, dir)
+		__field(bool, in)
 	),
 	TP_fast_assign(
 		__assign_str(device, dev_name(&qdev->pdev->dev))
@@ -33,10 +34,12 @@ TRACE_EVENT(qaic_ioctl,
                 __entry->nr =	_IOC_NR(cmd);
                 __entry->size =	_IOC_SIZE(cmd);
                 __entry->dir =	_IOC_DIR(cmd);
+                __entry->in =	in;
         ),
-        TP_printk("%s user:%d cmd:0x%x (%c nr=%d len=%d dir=%d)",
-                __get_str(device), __entry->user, __entry->cmd, __entry->type,
-		__entry->nr, __entry->size, __entry->dir)
+        TP_printk("%s:%s user:%d cmd:0x%x (%c nr=%d len=%d dir=%d)",
+		__entry->in ? "Entry" : "Exit", __get_str(device),
+		__entry->user, __entry->cmd, __entry->type, __entry->nr,
+		__entry->size, __entry->dir)
 );
 
 TRACE_EVENT(qaic_mhi_queue_error,
