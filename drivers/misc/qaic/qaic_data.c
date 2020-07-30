@@ -734,7 +734,7 @@ static int alloc_one_sgt_handle(struct qaic_device *qdev,
 	 * will be contiguous, which will be conducive to DMA.
 	 */
 	while (1) {
-		order = min(fls(nr_pages) - 1, max_order);
+		order = min(get_order(nr_pages * PAGE_SIZE), max_order);
 		while (1) {
 			page = alloc_pages(GFP_KERNEL | GFP_HIGHUSER |
 					   __GFP_NOWARN | __GFP_ZERO |
@@ -752,14 +752,12 @@ static int alloc_one_sgt_handle(struct qaic_device *qdev,
 			max_order = order;
 		}
 
-		ret = reserve_pages(page_to_pfn(page), 1 << order, true);
-		if (ret)
-			goto free_partial_alloc;
-
 		sg_set_page(sg, page, PAGE_SIZE << order, 0);
 		sgt->nents++;
 		nr_pages -= 1 << order;
-		if (!nr_pages) {
+		if (nr_pages <= 0) {
+			/* account for over allocation */
+			buf_extra += abs(nr_pages) * PAGE_SIZE;
 			if (buf_extra)
 				sg_set_page(sg, page,
 					    (PAGE_SIZE << order) - buf_extra,
@@ -767,6 +765,12 @@ static int alloc_one_sgt_handle(struct qaic_device *qdev,
 			sg_mark_end(sg);
 			break;
 		}
+
+		ret = reserve_pages(page_to_pfn(page),
+				    DIV_ROUND_UP(sg->length, PAGE_SIZE), true);
+		if (ret)
+			goto free_partial_alloc;
+
 		sg = sg_next(sg);
 	}
 
