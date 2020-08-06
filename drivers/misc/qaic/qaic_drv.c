@@ -566,8 +566,12 @@ request_regions_fail:
 enable_fail:
 	pci_set_drvdata(pdev, NULL);
 bar_fail:
-	for (i = 0; i < QAIC_NUM_DBC; ++i)
+	for (i = 0; i < QAIC_NUM_DBC; ++i) {
 		cleanup_srcu_struct(&qdev->dbc[i].ch_lock);
+		idr_destroy(&qdev->dbc[i].mem_handles);
+		idr_destroy(&qdev->dbc[i].dma_handles);
+		idr_destroy(&qdev->dbc[i].alloc_handles);
+	}
 	cleanup_srcu_struct(&qdev->dev_lock);
 	destroy_workqueue(qdev->tele_wq);
 tele_wq_fail:
@@ -595,6 +599,9 @@ static void qaic_pci_remove(struct pci_dev *pdev)
 		devm_free_irq(&pdev->dev, pci_irq_vector(pdev, i + 1),
 			      &qdev->dbc[i]);
 		cleanup_srcu_struct(&qdev->dbc[i].ch_lock);
+		idr_destroy(&qdev->dbc[i].mem_handles);
+		idr_destroy(&qdev->dbc[i].dma_handles);
+		idr_destroy(&qdev->dbc[i].alloc_handles);
 	}
 	destroy_workqueue(qdev->cntl_wq);
 	destroy_workqueue(qdev->tele_wq);
@@ -742,4 +749,4 @@ module_exit(qaic_exit);
 MODULE_AUTHOR("Qualcomm Cloud AI 100 Accelerator Kernel Driver Team");
 MODULE_DESCRIPTION("Qualcomm Cloud 100 AI Accelerators Driver");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("8.0.16"); /* MAJOR.MINOR.PATCH */
+MODULE_VERSION("8.0.17"); /* MAJOR.MINOR.PATCH */
