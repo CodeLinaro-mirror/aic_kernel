@@ -108,5 +108,43 @@ DEFINE_EVENT(qaic_encdec_error, decode_error,
         TP_ARGS(qdev, msg)
 );
 
+DECLARE_EVENT_CLASS(qaic_data_err,
+	TP_PROTO(struct qaic_device *qdev, const char *msg, int ret),
+	TP_ARGS(qdev, msg, ret),
+	TP_STRUCT__entry(
+		__string(device, dev_name(&qdev->pdev->dev))
+		__string(msg, msg)
+		__field(int, ret)
+	),
+	TP_fast_assign(
+		__assign_str(device, dev_name(&qdev->pdev->dev))
+		__assign_str(msg, msg)
+		__entry->ret = ret;
+	),
+	TP_printk("%s %s %d",
+		__get_str(device), __get_str(msg),
+		__entry->ret)
+);
+
+DEFINE_EVENT(qaic_data_err, qaic_mem_err,
+	TP_PROTO(struct qaic_device *qdev, const char *msg, int ret),
+	TP_ARGS(qdev, msg, ret)
+);
+
+DEFINE_EVENT(qaic_data_err, qaic_mmap_err,
+	TP_PROTO(struct qaic_device *qdev, const char *msg, int ret),
+	TP_ARGS(qdev, msg, ret)
+);
+
+DEFINE_EVENT(qaic_data_err, qaic_exec_err,
+	TP_PROTO(struct qaic_device *qdev, const char *msg, int ret),
+	TP_ARGS(qdev, msg, ret)
+);
+
+DEFINE_EVENT(qaic_data_err, qaic_wait_err,
+	TP_PROTO(struct qaic_device *qdev, const char *msg, int ret),
+	TP_ARGS(qdev, msg, ret)
+);
+
 #endif /* _TRACE_QAIC_H */
 #include <trace/define_trace.h>

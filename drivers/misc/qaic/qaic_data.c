@@ -19,6 +19,7 @@
 #include <uapi/misc/qaic.h>
 
 #include "qaic.h"
+#include "qaic_trace.h"
 
 #define PGOFF_DBC_SHIFT 32
 #define PGOFF_DBC_MASK	GENMASK_ULL(63, 32)
@@ -252,8 +253,11 @@ static int free_handles(struct qaic_device *qdev,
 
 	for (i = 0; i < count; i++) {
 		ret_free = free_one_handle(qdev, &req[i], dbc_id);
-		if (ret_free)
+		if (ret_free) {
+			trace_qaic_mem_err(qdev, "Failed to free handles.",
+					   ret_free);
 			ret = ret_free;
+		}
 	}
 
 	return ret;
@@ -677,18 +681,22 @@ static int map_handles(struct qaic_device *qdev, struct qaic_mem_req_entry *req,
 
 	for (i = 0; i < count; i++) {
 		ret = map_one_handle(qdev, &req[i], dbc_id);
-		if (ret)
+		if (ret) {
+			trace_qaic_mem_err(qdev, "Failed to map handle.", ret);
 			goto free_handle;
+		}
 	}
 	return 0;
 
 free_handle:
 	for (j = 0; j < i; j++) {
 		ret_free = free_one_handle(qdev, &req[j], dbc_id);
-		if (ret_free)
+		if (ret_free) {
+			trace_qaic_mem_err(qdev, "Failed to free handle.",
+					   ret_free);
 			ret = ret_free;
+		}
 	}
-
 	return ret;
 }
 
@@ -838,8 +846,10 @@ again:
 
 	ret = alloc_one_sgt_handle(qdev, dbc_id, req[i-1].total_size,
 				   req[i-1].dir, &alloc_handle);
-	if (ret < 0)
+	if (ret < 0) {
+		trace_qaic_mem_err(qdev, "Failed to allocate sgt handle.", ret);
 		goto free_sgt_handle;
+	}
 
 	while (j < i) {
 		/* Increase usage count for continued requests */
@@ -939,16 +949,21 @@ static int find_sgt(struct qaic_device *qdev, struct qaic_mem_req_entry *req,
 	u64 buf_fd;
 
 	ret = mutex_lock_interruptible(&dbc->handle_lock);
-	if (ret)
+	if (ret) {
+		trace_qaic_mem_err(qdev, "Failed to acquire mutex lock.", ret);
 		goto out;
+	}
 
 	for (i = 0; i < count; i++) {
 		dma_handle = idr_find(&dbc->dma_handles, req[i].buf_fd);
 
 		if (!dma_handle) {
 			ret = alloc_dma_handle(qdev, &req[i], dbc_id);
-			if (ret)
+			if (ret) {
+				trace_qaic_mem_err(qdev, "Failed to allocate  DMA Handle",
+						   ret);
 				goto free_dma_handles;
+			}
 		} else {
 			kref_get(&dma_handle->ref_count);
 		}
@@ -997,7 +1012,8 @@ static bool invalid_sem(struct qaic_sem *sem)
 	return false;
 }
 
-static int validate_req(struct qaic_mem_req_entry *req, int count)
+static int validate_req(struct qaic_device *qdev,
+			struct qaic_mem_req_entry *req, int count)
 {
 	enum dma_data_direction dir;
 	bool alloc_path, export;
@@ -1005,8 +1021,10 @@ static int validate_req(struct qaic_mem_req_entry *req, int count)
 	bool last;
 	int i;
 
-	if (!count)
+	if (!count) {
+		trace_qaic_mem_err(qdev, "Invalid entry count.", -EINVAL);
 		return -EINVAL;
+	}
 
 	dir = req[0].dir;
 	alloc_path = (req[0].handle == 0);
@@ -1018,43 +1036,72 @@ static int validate_req(struct qaic_mem_req_entry *req, int count)
 		if (!(req[i].db_len == 32 || req[i].db_len == 16 ||
 		    req[i].db_len == 8 || req[i].db_len == 0) ||
 		    invalid_sem(&req[i].sem0) || invalid_sem(&req[i].sem1) ||
-		    invalid_sem(&req[i].sem2) || invalid_sem(&req[i].sem3))
+		    invalid_sem(&req[i].sem2) || invalid_sem(&req[i].sem3)) {
+			trace_qaic_mem_err(qdev, "Invalid semaphore or doorbell len.",
+					   -EINVAL);
 			return -EINVAL;
+		}
 
-		if (!(req->dir == DMA_TO_DEVICE || req->dir == DMA_FROM_DEVICE))
+		if (!(req->dir == DMA_TO_DEVICE ||
+		    req->dir == DMA_FROM_DEVICE)) {
+			trace_qaic_mem_err(qdev, "Invalid request direction.",
+					   -EINVAL);
 			return -EINVAL;
+		}
 
-		if (export && req[i].buf_fd != -1UL)
+		if (export && req[i].buf_fd != -1UL) {
+			trace_qaic_mem_err(qdev, "Invalid buffer descriptor for export path.",
+					   -EINVAL);
 			return -EINVAL;
+		}
 
-		if (!export && req[i].buf_fd == -1UL)
+		if (!export && req[i].buf_fd == -1UL) {
+			trace_qaic_mem_err(qdev, "Invalid buffer descriptor for import path.",
+					   -EINVAL);
 			return -EINVAL;
+		}
 
-		if (alloc_path && req[i].handle)
+		if (alloc_path && req[i].handle) {
+			trace_qaic_mem_err(qdev, "Non Zero handle for memory allocation request.",
+					   -EINVAL);
 			return -EINVAL;
+		}
 
-		if (!alloc_path && !req[i].handle)
+		if (!alloc_path && !req[i].handle) {
+			trace_qaic_mem_err(qdev, "Zero handle for memory free request.",
+					   -EINVAL);
 			return -EINVAL;
+		}
 
-		if (!last && total_size != req[i].total_size)
+		if (!last && total_size != req[i].total_size) {
+			trace_qaic_mem_err(qdev, "Invalid total size.",
+					   -EINVAL);
 			return -EINVAL;
+		}
 
-		if (!last && dir != req[i].dir)
+		if (!last && dir != req[i].dir) {
+			trace_qaic_mem_err(qdev, "Invalid direction.", -EINVAL);
 			return -EINVAL;
+		}
 
 		if (last) {
 			total_size = req[i].total_size;
 			dir = req[i].dir;
 		}
 
-		if (req[i].offset + req[i].size > total_size)
+		if (req[i].offset + req[i].size > total_size) {
+			trace_qaic_mem_err(qdev, "Invalid size of entry.",
+					   -EINVAL);
 			return -EINVAL;
+		}
 
 		last = !req[i].cont;
 	}
 
-	if (!last)
+	if (!last) {
+		trace_qaic_mem_err(qdev, "Invalid last entry.", -EINVAL);
 		return -EINVAL;
+	}
 
 	return 0;
 }
@@ -1072,11 +1119,14 @@ int qaic_mem_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	hdr = kmalloc(sizeof(*hdr), GFP_KERNEL);
 	if (!hdr) {
 		ret = -ENOMEM;
+		trace_qaic_mem_err(qdev, "No space left for header.", ret);
 		goto out;
 	}
 
 	if (copy_from_user(hdr, (void __user *)arg, sizeof(*hdr))) {
 		ret = -EFAULT;
+		trace_qaic_mem_err(qdev, "Failed to copy header from user space.",
+				   ret);
 		goto free_hdr;
 	}
 
@@ -1085,12 +1135,15 @@ int qaic_mem_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	req = kcalloc(count, sizeof(*req), GFP_KERNEL);
 	if (!req) {
 		ret = -ENOMEM;
+		trace_qaic_mem_err(qdev, "No space left for entries.", ret);
 		goto free_hdr;
 	}
 
 	if (copy_from_user(req, (void __user *)(arg + sizeof(*hdr)),
 			   sizeof(*req) * count)) {
 		ret = -EFAULT;
+		trace_qaic_mem_err(qdev, "Failed to copy entries from user space.",
+				   ret);
 		goto free_req;
 	}
 
@@ -1098,6 +1151,7 @@ int qaic_mem_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 
 	if (dbc_id >= QAIC_NUM_DBC) {
 		ret = -EINVAL;
+		trace_qaic_mem_err(qdev, "Invalid DBC id.", ret);
 		goto free_req;
 	}
 
@@ -1106,10 +1160,11 @@ int qaic_mem_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	if (!qdev->dbc[dbc_id].usr ||
 			usr->handle != qdev->dbc[dbc_id].usr->handle) {
 		ret = -EPERM;
+		trace_qaic_mem_err(qdev, "User handle mismatch.", ret);
 		goto release_rcu;
 	}
 
-	ret = validate_req(req, count);
+	ret = validate_req(qdev, req, count);
 	if (ret)
 		goto release_rcu;
 
@@ -1127,6 +1182,8 @@ int qaic_mem_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 		if (!ret)
 			goto release_rcu;
 		ret = -EFAULT;
+		trace_qaic_mem_err(qdev, "Failed to copy entries to user space.",
+				   ret);
 	} else {
 		ret = free_handles(qdev, req, count, dbc_id);
 	}
@@ -1175,28 +1232,35 @@ int qaic_data_mmap(struct qaic_device *qdev, struct qaic_user *usr,
 
 	if (dbc_id >= QAIC_NUM_DBC) {
 		ret = -EINVAL;
+		trace_qaic_mmap_err(qdev, "Invalid DBC id.", ret);
 		goto out;
 	}
 
 	rcu_id = srcu_read_lock(&qdev->dbc[dbc_id].ch_lock);
 	if (!qdev->dbc[dbc_id].usr ||
 	    usr->handle != qdev->dbc[dbc_id].usr->handle) {
+		trace_qaic_mmap_err(qdev, "User handle mismatch.", ret);
 		ret = -EPERM;
 		goto release_rcu;
 	}
 
 	ret = mutex_lock_interruptible(&qdev->dbc[dbc_id].mem_lock);
-	if (ret)
+	if (ret) {
+		trace_qaic_mmap_err(qdev, "Mutex lock failed.", ret);
 		goto release_rcu;
+	}
 	mem = idr_find(&qdev->dbc[dbc_id].mem_handles, handle);
 	mutex_unlock(&qdev->dbc[dbc_id].mem_lock);
 	if (!mem) {
 		ret = -ENODEV;
+		trace_qaic_mmap_err(qdev, "No memory info found for request handle",
+				    ret);
 		goto release_rcu;
 	}
 
 	if (mem->no_xfer || !mem->export) {
 		ret = -EINVAL;
+		trace_qaic_mmap_err(qdev, "Invalid parameters.", ret);
 		goto release_rcu;
 	}
 
@@ -1281,16 +1345,20 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	hdr = kmalloc(sizeof(*hdr), GFP_KERNEL);
 	if (!hdr) {
 		ret = -ENOMEM;
+		trace_qaic_exec_err(qdev, "No space left for header", ret);
 		goto out;
 	}
 
 	if (copy_from_user(hdr, (void __user *)arg, sizeof(*hdr))) {
 		ret = -EFAULT;
+		trace_qaic_exec_err(qdev, "Failed to copy header from user space.",
+				    ret);
 		goto free_hdr;
 	}
 
 	if (hdr->dbc_id > QAIC_NUM_DBC) {
 		ret = -EINVAL;
+		trace_qaic_exec_err(qdev, "Invalid DBC id.", ret);
 		goto free_hdr;
 	}
 
@@ -1299,12 +1367,15 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	exec = kcalloc(count, sizeof(*exec), GFP_KERNEL);
 	if (!exec) {
 		ret = -ENOMEM;
+		trace_qaic_exec_err(qdev, "No space left for entries.", ret);
 		goto free_hdr;
 	}
 
 	if (copy_from_user(exec, (void __user *)(arg + sizeof(*hdr)),
 			   sizeof(*exec) * count)) {
 		ret = -EFAULT;
+		trace_qaic_exec_err(qdev, "Failed to copy entries from user space.",
+				    ret);
 		goto free_exec;
 	}
 
@@ -1312,12 +1383,15 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	if (!qdev->dbc[hdr->dbc_id].usr ||
 	    qdev->dbc[hdr->dbc_id].usr->handle != usr->handle) {
 		ret = -EPERM;
+		trace_qaic_exec_err(qdev, "User handle mismatch.", ret);
 		goto release_rcu;
 	}
 
 	ret = mutex_lock_interruptible(&qdev->dbc[hdr->dbc_id].mem_lock);
-	if (ret)
+	if (ret) {
+		trace_qaic_exec_err(qdev, "Mutex lock failed.", ret);
 		goto release_rcu;
+	}
 
 	head = le32_to_cpu(__raw_readl(qdev->dbc[hdr->dbc_id].dbc_base +
 			   REQHP_OFF));
@@ -1327,6 +1401,7 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	if (head == U32_MAX || tail == U32_MAX) {
 		/* PCI link error */
 		ret = -ENODEV;
+		trace_qaic_exec_err(qdev, "No device found.", ret);
 		goto unlock_mem_lock;
 	}
 
@@ -1343,12 +1418,15 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 
 		if (dbc_id != hdr->dbc_id) {
 			ret = -EINVAL;
+			trace_qaic_exec_err(qdev, "Invalid DBC id.", ret);
 			goto unlock_mem_lock;
 		}
 
 		mem = idr_find(&qdev->dbc[dbc_id].mem_handles, handle);
 		if (!mem) {
 			ret = -ENODEV;
+			trace_qaic_exec_err(qdev, "No memory info found for execute handle.",
+					    ret);
 			goto unlock_mem_lock;
 		}
 		/* prevent free_handle from taking the memory from under us */
@@ -1356,6 +1434,7 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 
 		if (mem->dir != exec[i].dir) {
 			ret = -EINVAL;
+			trace_qaic_exec_err(qdev, "Invalid direction.", ret);
 			kref_put(&mem->ref_count, free_handle_mem);
 			goto unlock_mem_lock;
 		}
@@ -1371,6 +1450,8 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 
 		if (queued) {
 			ret = -EINVAL;
+			trace_qaic_exec_err(qdev, "Request already queued.",
+					    ret);
 			kref_put(&mem->ref_count, free_handle_mem);
 			goto unlock_mem_lock;
 		}
@@ -1384,6 +1465,7 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 		if (ret) {
 			mem->queued = false;
 			kref_put(&mem->ref_count, free_handle_mem);
+			trace_qaic_exec_err(qdev, "Queue is full", ret);
 			goto sync_to_cpu;
 		}
 	}
@@ -1500,16 +1582,20 @@ int qaic_wait_exec_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	wait = kmalloc(sizeof(*wait), GFP_KERNEL);
 	if (!wait) {
 		ret = -ENOMEM;
+		trace_qaic_wait_err(qdev, "No space left for entries", ret);
 		goto out;
 	}
 
 	if (copy_from_user(wait, (void __user *)arg, sizeof(*wait))) {
 		ret = -EFAULT;
+		trace_qaic_wait_err(qdev, "Failed to copy from user space.",
+				    ret);
 		goto free_wait;
 	}
 
 	if (wait->dbc_id > QAIC_NUM_DBC) {
 		ret = -EINVAL;
+		trace_qaic_wait_err(qdev, "Invalid DBC id.", ret);
 		goto free_wait;
 	}
 
@@ -1522,6 +1608,7 @@ int qaic_wait_exec_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 
 	if (dbc_id > QAIC_NUM_DBC) {
 		ret = -EINVAL;
+		trace_qaic_wait_err(qdev, "Invalid handle.", ret);
 		goto free_wait;
 	}
 
@@ -1529,6 +1616,7 @@ int qaic_wait_exec_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	if (!qdev->dbc[dbc_id].usr ||
 	    qdev->dbc[dbc_id].usr->handle != usr->handle) {
 		ret = -EPERM;
+		trace_qaic_wait_err(qdev, "User handle mismatch.", ret);
 		goto release_rcu;
 	}
 
@@ -1539,6 +1627,8 @@ int qaic_wait_exec_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	mutex_unlock(&qdev->dbc[dbc_id].mem_lock);
 	if (!mem) {
 		ret = -ENODEV;
+		trace_qaic_wait_err(qdev, "No memory info found for execute handle.",
+				    ret);
 		goto release_rcu;
 	}
 
@@ -1549,12 +1639,15 @@ int qaic_wait_exec_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	ret = wait_for_completion_interruptible_timeout(&mem->xfer_done,
 				msecs_to_jiffies(timeout));
 	rcu_id = srcu_read_lock(&qdev->dbc[dbc_id].ch_lock);
-	if (!ret)
+	if (!ret) {
 		ret = -ETIMEDOUT;
+		trace_qaic_wait_err(qdev, "Execute completion timed out.", ret);
+	}
 	else if (ret > 0)
 		ret = 0;
 	if (!qdev->dbc[dbc_id].usr) {
 		ret = -EPERM;
+		trace_qaic_wait_err(qdev, "Permission denied.", ret);
 		goto release_rcu;
 	}
 
