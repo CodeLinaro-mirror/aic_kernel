@@ -177,7 +177,7 @@ static struct mhi_channel_config aic100_channels[] = {
         {
 		.num = 10,
 		.name = "QAIC_CONTROL",
-		.num_elements = 32,
+		.num_elements = 128,
 		.event_ring = 0,
 		.dir = DMA_TO_DEVICE,
 		.ee = MHI_EE_AMSS,
@@ -193,7 +193,7 @@ static struct mhi_channel_config aic100_channels[] = {
         {
 		.num = 11,
 		.name = "QAIC_CONTROL",
-		.num_elements = 32,
+		.num_elements = 128,
 		.event_ring = 0,
 		.dir = DMA_FROM_DEVICE,
 		.ee = MHI_EE_AMSS,

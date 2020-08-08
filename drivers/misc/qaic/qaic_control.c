@@ -4,6 +4,7 @@
 
 #include <asm/byteorder.h>
 #include <linux/completion.h>
+#include <linux/delay.h>
 #include <linux/dma-mapping.h>
 #include <linux/kref.h>
 #include <linux/list.h>
@@ -12,6 +13,7 @@
 #include <linux/mutex.h>
 #include <linux/pci.h>
 #include <linux/scatterlist.h>
+#include <linux/sched/signal.h>
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/workqueue.h>
@@ -27,6 +29,8 @@
 #define RESP_TIMEOUT		   60 * HZ
 #define QAIC_MANAGE_EXT_MSG_LENGTH SZ_64K /* Max DMA message length */
 #define QAIC_WRAPPER_MAX_SIZE      SZ_4K
+#define QAIC_MHI_RETRY_WAIT_MS	   100
+#define QAIC_MHI_RETRY_MAX	   20
 
 /*
  * wire encoding structures for the manage protocol.
@@ -917,6 +921,7 @@ static void *msg_xfer(struct qaic_device *qdev, struct wrapper_list *wrappers,
 	struct xfer_queue_elem elem;
 	struct wrapper_msg *w;
 	struct _msg *out_buf;
+	int retry_count;
 	long ret;
 
 	if (qdev->in_reset) {
@@ -957,12 +962,21 @@ static void *msg_xfer(struct qaic_device *qdev, struct wrapper_list *wrappers,
 
 	list_for_each_entry(w, &wrappers->list, list) {
 		kref_get(&w->ref_count);
+		retry_count = 0;
+retry:
 		ret = mhi_queue_transfer(qdev->cntl_ch, DMA_TO_DEVICE, &w->msg,
 					 w->len,
 					 list_is_last(&w->list,
 						      &wrappers->list) ?
 						MHI_EOT : MHI_CHAIN);
 		if (ret) {
+			if (ret == -EBUSY &&
+			    retry_count++ < QAIC_MHI_RETRY_MAX) {
+				msleep_interruptible(QAIC_MHI_RETRY_WAIT_MS);
+				if (!signal_pending(current))
+					goto retry;
+			}
+
 			qdev->cntl_lost_buf = true;
 			kref_put(&w->ref_count, free_wrapper);
 			mutex_unlock(&qdev->cntl_mutex);
