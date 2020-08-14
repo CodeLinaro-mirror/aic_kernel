@@ -1399,6 +1399,8 @@ sync_to_cpu:
 	for (j = i - 1; j >= 0; j--) {
 		mem = list_last_entry(&qdev->dbc[hdr->dbc_id].xfer_list,
 				      struct mem_handle, list);
+		mem->queued = false;
+		kref_put(&mem->ref_count, free_handle_mem);
 		dma_sync_sg_for_cpu(&qdev->pdev->dev, mem->sgt->sgl,
 				    mem->sgt->nents, mem->dir);
 		list_del(&mem->list);
