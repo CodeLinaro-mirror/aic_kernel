@@ -59,7 +59,6 @@ static void free_usr(struct kref *kref)
 {
 	struct qaic_user *usr = container_of(kref, struct qaic_user, ref_count);
 
-	list_del(&usr->node);
 	cleanup_srcu_struct(&usr->qdev_lock);
 	kfree(usr);
 }
@@ -137,15 +136,14 @@ static int qaic_device_release(struct inode *inode, struct file *filp)
 		}
 		srcu_read_unlock(&qdev->dev_lock, qdev_rcu_id);
 
-		srcu_read_unlock(&usr->qdev_lock, usr_rcu_id);
 		mutex_lock(&qdev->users_mutex);
-		kref_put(&usr->ref_count, free_usr);
+		if (!list_empty(&usr->node))
+			list_del_init(&usr->node);
 		mutex_unlock(&qdev->users_mutex);
-	} else {
-		srcu_read_unlock(&usr->qdev_lock, usr_rcu_id);
-		/* safe to do without the mutex because reset already has ref */
-		kref_put(&usr->ref_count, free_usr);
 	}
+
+	srcu_read_unlock(&usr->qdev_lock, usr_rcu_id);
+	kref_put(&usr->ref_count, free_usr);
 
 	filp->private_data = NULL;
 	return 0;
@@ -398,6 +396,10 @@ void qaic_dev_reset_clean_local_state(struct qaic_device *qdev)
 	list_for_each_entry_safe(usr, u, &qdev->users, node) {
 		usr->qdev = NULL;
 		synchronize_srcu(&usr->qdev_lock);
+		mutex_lock(&qdev->users_mutex);
+		if (!list_empty(&usr->node))
+			list_del_init(&usr->node);
+		mutex_unlock(&qdev->users_mutex);
 		kref_put(&usr->ref_count, free_usr);
 	}
 
@@ -749,4 +751,4 @@ module_exit(qaic_exit);
 MODULE_AUTHOR("Qualcomm Cloud AI 100 Accelerator Kernel Driver Team");
 MODULE_DESCRIPTION("Qualcomm Cloud 100 AI Accelerators Driver");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("8.0.18"); /* MAJOR.MINOR.PATCH */
+MODULE_VERSION("8.0.19"); /* MAJOR.MINOR.PATCH */
