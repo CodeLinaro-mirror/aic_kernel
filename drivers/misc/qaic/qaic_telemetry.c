@@ -564,6 +564,7 @@ static int qaic_telemetry_mhi_probe(struct mhi_device *mhi_dev,
 
 	mhi_device_set_devdata(mhi_dev, qdev);
 	qdev->tele_ch = mhi_dev;
+	qdev->tele_lost_buf = false;
 	ret = mhi_prepare_for_transfer(qdev->tele_ch);
 
 	if (ret)

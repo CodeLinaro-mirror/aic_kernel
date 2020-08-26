@@ -1358,6 +1358,8 @@ int qaic_control_open(struct qaic_device *qdev)
 	if (!qdev->cntl_ch)
 		return -ENODEV;
 
+	qdev->cntl_lost_buf = false;
+
 	return mhi_prepare_for_transfer(qdev->cntl_ch);
 }
 
