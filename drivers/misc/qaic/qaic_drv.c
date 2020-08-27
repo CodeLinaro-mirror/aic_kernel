@@ -362,7 +362,7 @@ static void qaic_notify_reset(struct qaic_device *qdev)
 	synchronize_srcu(&qdev->dev_lock);
 }
 
-void qaic_dev_reset_clean_local_state(struct qaic_device *qdev)
+void qaic_dev_reset_clean_local_state(struct qaic_device *qdev, bool exit_reset)
 {
 	struct qaic_user *usr;
 	struct qaic_user *u;
@@ -407,6 +407,9 @@ void qaic_dev_reset_clean_local_state(struct qaic_device *qdev)
 	/* start tearing things down */
 	for (i = 0; i < QAIC_NUM_DBC; ++i)
 		release_dbc(qdev, i);
+
+	if (exit_reset)
+		qdev->in_reset = false;
 }
 
 static void reset_mhi_work_func(struct work_struct *work)
@@ -415,7 +418,7 @@ static void reset_mhi_work_func(struct work_struct *work)
 
 	qdev = container_of(work, struct qaic_device, reset_mhi_work);
 
-	qaic_dev_reset_clean_local_state(qdev);
+	qaic_dev_reset_clean_local_state(qdev, false);
 	qaic_mhi_start_reset(qdev->mhi_cntl);
 	qdev->in_reset = false;
 	qaic_mhi_reset_done(qdev->mhi_cntl);
@@ -594,7 +597,7 @@ static void qaic_pci_remove(struct pci_dev *pdev)
 	if (!qdev)
 		return;
 
-	qaic_dev_reset_clean_local_state(qdev);
+	qaic_dev_reset_clean_local_state(qdev, false);
 	cancel_work_sync(&qdev->reset_mhi_work);
 	qaic_mhi_free_controller(qdev->mhi_cntl, link_up);
 	qaic_debugfs_remove_pci_device(pdev);
@@ -629,7 +632,7 @@ static void qaic_pci_reset_prepare(struct pci_dev *pdev)
 
 	qaic_notify_reset(qdev);
 	qaic_mhi_start_reset(qdev->mhi_cntl);
-	qaic_dev_reset_clean_local_state(qdev);
+	qaic_dev_reset_clean_local_state(qdev, false);
 }
 
 static void qaic_pci_reset_done(struct pci_dev *pdev)
@@ -752,4 +755,4 @@ module_exit(qaic_exit);
 MODULE_AUTHOR("Qualcomm Cloud AI 100 Accelerator Kernel Driver Team");
 MODULE_DESCRIPTION("Qualcomm Cloud 100 AI Accelerators Driver");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("8.0.21"); /* MAJOR.MINOR.PATCH */
+MODULE_VERSION("8.0.22"); /* MAJOR.MINOR.PATCH */

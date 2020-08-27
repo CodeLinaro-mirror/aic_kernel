@@ -428,7 +428,7 @@ static void mhi_status_cb(struct mhi_controller *mhi_cntl,
 		schedule_work(&qdev->reset_mhi_work);
 	/* this event occurs in non-atomic context */
 	if (reason == MHI_CB_SYS_ERROR && !qdev->in_reset)
-		qaic_dev_reset_clean_local_state(qdev);
+		qaic_dev_reset_clean_local_state(qdev, true);
 }
 
 struct mhi_controller *qaic_mhi_register_controller(struct pci_dev *pci_dev,
