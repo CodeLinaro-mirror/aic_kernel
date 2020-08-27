@@ -210,6 +210,14 @@ static long qaic_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		}
 		ret = qaic_wait_exec_ioctl(qdev, usr, arg);
 		break;
+	case QAIC_IOCTL_QUERY_NR:
+		if (_IOC_DIR(cmd) != (_IOC_READ | _IOC_WRITE) ||
+		    _IOC_SIZE(cmd) < sizeof(struct qaic_query)) {
+			ret = -EINVAL;
+			break;
+		}
+		ret = qaic_query_ioctl(qdev, usr, arg);
+		break;
 	default:
 		ret = -ENOTTY;
 	}
@@ -747,4 +755,4 @@ module_exit(qaic_exit);
 MODULE_AUTHOR("Qualcomm Cloud AI 100 Accelerator Kernel Driver Team");
 MODULE_DESCRIPTION("Qualcomm Cloud AI 100 Accelerators Driver");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("9.0.5"); /* MAJOR.MINOR.PATCH */
+MODULE_VERSION("9.1.0"); /* MAJOR.MINOR.PATCH */

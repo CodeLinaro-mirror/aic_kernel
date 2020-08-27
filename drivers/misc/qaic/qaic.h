@@ -108,6 +108,8 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 		       unsigned long arg);
 int qaic_wait_exec_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 			 unsigned long arg);
+int qaic_query_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
+		     unsigned long arg);
 int qaic_data_mmap(struct qaic_device *qdev, struct qaic_user *usr,
 		   struct vm_area_struct *vma);
 void qaic_data_get_fifo_info(struct dma_bridge_chan *dbc, u32 *head,

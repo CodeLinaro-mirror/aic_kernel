@@ -165,10 +165,33 @@ struct qaic_wait_exec {
 	__u32 dbc_id; /* Identifier of assigned DMA Bridge channel */
 };
 
+struct qaic_query_hdr {
+	__u32 len;    /* total length of query */
+	__u32 dbc_id; /* Identifier of assigned DMA Bridge channel */
+};
+
+struct qaic_query {
+	struct qaic_query_hdr hdr;
+	__u8 data[0]; /* qaic_query_entry container */
+};
+
+struct qaic_query_entry {
+	__u64 handle;		 /* Handle of the memory request */
+	__u32 queue_level_before;/* Number of elements in queue before
+				  * submission given memory request
+				  */
+	__u32 num_queue_element; /* Number of elements to add in the
+				  * queue for given memory request
+				  */
+	__u32 submit_latency_us;
+	__u32 device_latency_us;
+};
+
 #define QAIC_IOCTL_MANAGE_NR	0x01
 #define QAIC_IOCTL_MEM_NR	0x02
 #define QAIC_IOCTL_EXECUTE_NR	0x03
 #define QAIC_IOCTL_WAIT_EXEC_NR	0x04
+#define QAIC_IOCTL_QUERY_NR	0x05
 
 /*
  * Send Manage command to the device
@@ -262,5 +285,34 @@ struct qaic_wait_exec {
  */
 #define QAIC_IOCTL_WAIT_EXEC _IOW('Q', QAIC_IOCTL_WAIT_EXEC_NR,	\
 				  struct wait_exec)
+
+/*
+ * Retrieve kernel profiling data.
+ *
+ * Allows users to query for kernel profiling data. The kernel profiling data
+ * are as follows,
+ * queue_level_before - Number of elements already queued before submission of
+ *			of the given memory request.
+ * num_queue_element -  Number of elements to add in queue for the current
+ *			memory request.
+ * submit_latency -     Time taken by kernel to submit the memory request(us)
+ * device_latency -     Time taken by device complete the memory request(us)
+ * User can pass multiple memory handles to query profiling data for more then
+ * one memory request.
+ *
+ * Kernel profiling should only be retrieved after the wait ioctl
+ * is complete and before freeing the resources for that memory request.
+ *
+ * The return value is 0 for success, or a standard error code.  Some of the
+ * possible errors:
+ *
+ * ENOMEM - Unable to obtain memory while processing request
+ * EPERM  - Invalid permissions to access resource
+ * EINVAL - Invalid memory handle, request made before completion of memory
+ *	    request or after freeing the resources for that memory request
+ * EFAULT - Error in accessing memory from user
+ * ENODEV - Resource does not exist
+ */
+#define QAIC_IOCTL_QUERY _IOWR('Q', QAIC_IOCTL_QUERY_NR, struct qaic_query)
 
 #endif /* QAIC_H_ */

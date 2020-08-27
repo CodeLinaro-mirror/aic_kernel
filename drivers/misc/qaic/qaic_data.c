@@ -115,6 +115,10 @@ struct mem_handle {
 		struct dma_buf_handle	*dma;
 		struct alloc_buf_handle	*alloc;
 	} handle;
+	u64			req_received_ts;
+	u64			req_submit_ts;
+	u64			req_processed_ts;
+	u32			queue_level_before;
 };
 
 inline int get_dbc_req_elem_size(void)
@@ -621,6 +625,10 @@ static int map_one_handle(struct qaic_device *qdev,
 	mem->qdev = qdev;
 	mem->queued = false;
 	mem->dbc_id = dbc_id;
+	mem->req_submit_ts = 0;
+	mem->req_received_ts = 0;
+	mem->req_processed_ts = 0;
+	mem->queue_level_before = 0;
 	init_completion(&mem->xfer_done);
 	complete_all(&mem->xfer_done);
 
@@ -1328,6 +1336,9 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	struct qaic_execute_hdr *hdr;
 	struct mem_handle *mem;
 	unsigned long flags;
+	u64 received_ts = 0;
+	u32 queue_level = 0;
+	u64 submit_ts = 0;
 	bool queued;
 	u16 req_id;
 	int handle;
@@ -1339,6 +1350,7 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	int ret;
 	int i, j;
 
+	received_ts = ktime_get_ns();
 	hdr = kmalloc(sizeof(*hdr), GFP_KERNEL);
 	if (!hdr) {
 		ret = -ENOMEM;
@@ -1401,6 +1413,8 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 		trace_qaic_exec_err(qdev, "No device found.", ret);
 		goto unlock_mem_lock;
 	}
+	queue_level = head <= tail ? tail - head :
+				     qdev->dbc[dbc_id].nelem - (head - tail);
 
 	for (i = 0; i < count; i++) {
 		/*
@@ -1465,8 +1479,22 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 		}
 	}
 
+	submit_ts = ktime_get_ns();
 	__raw_writel(cpu_to_le32(tail), qdev->dbc[hdr->dbc_id].dbc_base +
 		     REQTP_OFF);
+
+	/* Collect kernel Profiling data */
+	for (i = 0; i < count; i++) {
+		handle = exec[i].handle >> PAGE_SHIFT & ~PGOFF_DBC_MASK;
+		dbc_id = (exec[i].handle >> PAGE_SHIFT & PGOFF_DBC_MASK)
+			 >> PGOFF_DBC_SHIFT;
+		mem = idr_find(&qdev->dbc[dbc_id].mem_handles, handle);
+
+		mem->req_received_ts = received_ts;
+		mem->req_submit_ts = submit_ts;
+		mem->queue_level_before = queue_level;
+		queue_level += mem->nents;
+	}
 
 	goto unlock_mem_lock;
 
@@ -1548,6 +1576,7 @@ read_fifo:
 						    mem->sgt->sgl,
 						    mem->sgt->nents,
 						    mem->dir);
+				mem->req_processed_ts = ktime_get_ns();
 				mem->queued = false;
 				complete_all(&mem->xfer_done);
 				kref_put(&mem->ref_count, free_handle_mem);
@@ -1650,6 +1679,150 @@ release_rcu:
 	srcu_read_unlock(&qdev->dbc[dbc_id].ch_lock, rcu_id);
 free_wait:
 	kfree(wait);
+out:
+	return ret;
+}
+
+static int extract_mem_handle(struct qaic_device *qdev, struct qaic_user *usr,
+			      u64 handle_in, struct mem_handle **mem)
+{
+	int ret = 0;
+	int rcu_id;
+	u32 dbc_id;
+	u64 handle;
+
+	/* we shifted up by PAGE_SHIFT to make mmap happy, need to undo that */
+	handle = handle_in >> PAGE_SHIFT & ~PGOFF_DBC_MASK;
+	dbc_id = (handle_in >> PAGE_SHIFT & PGOFF_DBC_MASK) >> PGOFF_DBC_SHIFT;
+
+	if (dbc_id > QAIC_NUM_DBC) {
+		ret = -EINVAL;
+		trace_qaic_query_err(qdev, "Invalid DBC id.", ret);
+		goto exit;
+	}
+
+	rcu_id = srcu_read_lock(&qdev->dbc[dbc_id].ch_lock);
+	if (!qdev->dbc[dbc_id].usr ||
+	    qdev->dbc[dbc_id].usr->handle != usr->handle) {
+		ret = -EPERM;
+		trace_qaic_query_err(qdev, "User handle mismatch.", ret);
+		goto release_rcu;
+	}
+
+	ret = mutex_lock_interruptible(&qdev->dbc[dbc_id].mem_lock);
+	if (ret)
+		goto release_rcu;
+	*mem = idr_find(&qdev->dbc[dbc_id].mem_handles, handle);
+	mutex_unlock(&qdev->dbc[dbc_id].mem_lock);
+	if (!*mem) {
+		ret = -ENODEV;
+		trace_qaic_query_err(qdev, "No memory info found for execute handle.",
+				     ret);
+		goto release_rcu;
+	}
+
+release_rcu:
+	srcu_read_unlock(&qdev->dbc[dbc_id].ch_lock, rcu_id);
+exit:
+	return ret;
+}
+
+int qaic_query_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
+		      unsigned long arg)
+{
+	struct qaic_query_entry *req_i = NULL;
+	struct qaic_query_entry *req = NULL;
+	struct qaic_query_hdr *hdr = NULL;
+	struct mem_handle *mem = NULL;
+	int ret = 0;
+	u32 len = 0;
+
+	hdr = kmalloc(sizeof(*hdr), GFP_KERNEL);
+	if (!hdr) {
+		ret = -ENOMEM;
+		trace_qaic_query_err(qdev, "No space left for header.", ret);
+		goto out;
+	}
+
+	if (copy_from_user(hdr, (void __user *)arg, sizeof(*hdr))) {
+		ret = -EFAULT;
+		trace_qaic_query_err(qdev, "Failed to copy header from user space.",
+				     ret);
+		goto free_hdr;
+	}
+
+	if (hdr->len < sizeof(*hdr) ) {
+		ret = -EINVAL;
+		trace_qaic_query_err(qdev, "Invalid given size.", ret);
+		goto free_hdr;
+	}
+
+	len = hdr->len - sizeof(*hdr);
+
+	if (hdr->dbc_id > QAIC_NUM_DBC) {
+		ret = -EINVAL;
+		trace_qaic_query_err(qdev, "Invalid DBC id.", ret);
+		goto free_hdr;
+	}
+
+	if (len % sizeof(*req) != 0) {
+		ret = -EINVAL;
+		trace_qaic_query_err(qdev, "Invalid given size.", ret);
+		goto free_hdr;
+	}
+
+	req = kmalloc(len, GFP_KERNEL);
+	if (!req) {
+		ret = -ENOMEM;
+		trace_qaic_query_err(qdev, "No space left for entries.", ret);
+		goto free_hdr;
+	}
+
+	if (copy_from_user(req, (void __user *)((u8 *)arg + sizeof(*hdr)),
+			   len)) {
+		ret = -EFAULT;
+		trace_qaic_query_err(qdev, "Failed to copy entries from user space.",
+				     ret);
+		goto free_req;
+	}
+
+	req_i = req;
+	while (len > 0) {
+		ret = extract_mem_handle(qdev, usr, req_i->handle, &mem);
+		if (ret) {
+			trace_qaic_query_err(qdev, "Failed extracting mem handle.",
+					     ret);
+			goto free_req;
+		}
+		if (mem->queued == true ||
+		    mem->req_submit_ts == 0 ||
+		    mem->req_processed_ts == 0) {
+			ret = -EINVAL;
+			trace_qaic_query_err(qdev, "Invalid handle.", ret);
+			goto free_req;
+		}
+		req_i->queue_level_before = mem->queue_level_before;
+		req_i->num_queue_element = mem->nents;
+		req_i->submit_latency_us = (mem->req_submit_ts -
+					   mem->req_received_ts)/1000;
+		req_i->device_latency_us = (mem->req_processed_ts -
+					      mem->req_submit_ts)/1000;
+		req_i++;
+		len -= sizeof(*req_i);
+	}
+
+	if (copy_to_user((void __user *)((u8 *)arg + sizeof(*hdr)), req,
+			 hdr->len - sizeof(*hdr))) {
+		ret = -EFAULT;
+		trace_qaic_query_err(qdev, "Failed to copy entries to user space.",
+				     ret);
+		goto free_req;
+	}
+
+free_req:
+	kfree(req);
+free_hdr:
+	kfree(hdr);
 out:
 	return ret;
 }

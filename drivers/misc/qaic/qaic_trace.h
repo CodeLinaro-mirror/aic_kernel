@@ -146,5 +146,10 @@ DEFINE_EVENT(qaic_data_err, qaic_wait_err,
 	TP_ARGS(qdev, msg, ret)
 );
 
+DEFINE_EVENT(qaic_data_err, qaic_query_err,
+	TP_PROTO(struct qaic_device *qdev, const char *msg, int ret),
+	TP_ARGS(qdev, msg, ret)
+);
+
 #endif /* _TRACE_QAIC_H */
 #include <trace/define_trace.h>
