@@ -1239,8 +1239,8 @@ int qaic_data_mmap(struct qaic_device *qdev, struct qaic_user *usr,
 	rcu_id = srcu_read_lock(&qdev->dbc[dbc_id].ch_lock);
 	if (!qdev->dbc[dbc_id].usr ||
 	    usr->handle != qdev->dbc[dbc_id].usr->handle) {
-		trace_qaic_mmap_err(qdev, "User handle mismatch.", ret);
 		ret = -EPERM;
+		trace_qaic_mmap_err(qdev, "User handle mismatch.", ret);
 		goto release_rcu;
 	}
 
