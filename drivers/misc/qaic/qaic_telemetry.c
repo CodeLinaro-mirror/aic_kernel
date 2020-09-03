@@ -36,6 +36,7 @@ enum cmds {
 	CMD_POWER_MAX,
 	CMD_THROTTLE_PERCENT,
 	CMD_THROTTLE_TIME,
+	CMD_UPTIME,
 };
 
 enum cmd_type {
@@ -351,6 +352,43 @@ static const struct attribute_group power_group = {
 	.attrs = power_attrs,
 };
 
+static ssize_t uptime_show(struct device *dev,
+				  struct device_attribute *a, char *buf)
+{
+	struct qaic_device *qdev = dev_get_drvdata(dev);
+	long val = 0;
+	int rcu_id;
+	int ret;
+
+	rcu_id = srcu_read_lock(&qdev->dev_lock);
+	if (qdev->in_reset) {
+		srcu_read_unlock(&qdev->dev_lock, rcu_id);
+		return -ENODEV;
+	}
+
+	ret = telemetry_request(qdev, CMD_UPTIME, TYPE_READ, &val);
+
+	if (ret) {
+		srcu_read_unlock(&qdev->dev_lock, rcu_id);
+		return ret;
+	}
+
+	/* The time, in seconds, the device has been up */
+	srcu_read_unlock(&qdev->dev_lock, rcu_id);
+	return sprintf(buf, "%ld\n", val);
+}
+
+SENSOR_DEVICE_ATTR_RO(uptime, uptime, 0);
+
+static struct attribute *uptime_attrs[] = {
+	&sensor_dev_attr_uptime.dev_attr.attr,
+	NULL,
+};
+
+static const struct attribute_group uptime_group = {
+	.attrs = uptime_attrs,
+};
+
 static umode_t qaic_is_visible(const void *data, enum hwmon_sensor_types type,
 			       u32 attr, int channel)
 {
@@ -508,6 +546,7 @@ exit:
 
 static const struct attribute_group *special_groups[] = {
 	&power_group,
+	&uptime_group,
 	0,
 };
 
