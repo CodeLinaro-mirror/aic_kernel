@@ -255,7 +255,7 @@ static int qaic_mhi_probe(struct mhi_device *mhi_dev,
 {
 	struct qaic_device *qdev;
 	dev_t devno;
-	int ret;
+	int ret, dev_minor;
 	u16 major, minor;
 
 	/*
@@ -292,15 +292,15 @@ static int qaic_mhi_probe(struct mhi_device *mhi_dev,
 	}
 
 	mutex_lock(&qaic_devs_lock);
-	ret = idr_alloc(&qaic_devs, qdev, 0, QAIC_MAX_MINORS, GFP_KERNEL);
+	dev_minor = idr_alloc(&qaic_devs, qdev, 0, QAIC_MAX_MINORS, GFP_KERNEL);
 	mutex_unlock(&qaic_devs_lock);
 
-	if (ret < 0) {
-		pci_dbg(qdev->pdev, "%s: idr_alloc failed %d\n", __func__, ret);
+	if (dev_minor < 0) {
+		pci_dbg(qdev->pdev, "%s: idr_alloc failed %d\n", __func__, dev_minor);
 		goto close_control;
 	}
 
-	devno = MKDEV(qaic_major, ret);
+	devno = MKDEV(qaic_major, dev_minor);
 
 	qdev->cdev = cdev_alloc();
 	if (!qdev->cdev) {
@@ -317,19 +317,13 @@ static int qaic_mhi_probe(struct mhi_device *mhi_dev,
 		goto free_cdev;
 	}
 
-	qdev->dev = device_create(qaic_class, NULL, devno, NULL,
-				  "qaic_aic100_%04x:%02x:%02x.%d",
-				  pci_domain_nr(qdev->pdev->bus),
-				  qdev->pdev->bus->number,
-				  PCI_SLOT(qdev->pdev->devfn),
-				  PCI_FUNC(qdev->pdev->devfn));
+	qdev->dev = device_create(qaic_class, &qdev->pdev->dev, devno, qdev,
+				  "qaic_aic100_%d", dev_minor);
 	if (IS_ERR(qdev->dev)) {
 		ret = PTR_ERR(qdev->dev);
 		pci_dbg(qdev->pdev, "%s: device_create failed %d\n", __func__, ret);
 		goto free_cdev;
 	}
-
-	dev_set_drvdata(qdev->dev, qdev);
 
 	return 0;
 
@@ -755,4 +749,4 @@ module_exit(qaic_exit);
 MODULE_AUTHOR("Qualcomm Cloud AI 100 Accelerator Kernel Driver Team");
 MODULE_DESCRIPTION("Qualcomm Cloud 100 AI Accelerators Driver");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("8.0.23"); /* MAJOR.MINOR.PATCH */
+MODULE_VERSION("9.0.0"); /* MAJOR.MINOR.PATCH */
