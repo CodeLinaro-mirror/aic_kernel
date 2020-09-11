@@ -210,12 +210,10 @@ static int free_one_handle(struct qaic_device *qdev,
 	int dbc_id;
 	int ret;
 
-	handle = req->handle & ~PGOFF_DBC_MASK;
-	dbc_id = (req->handle & PGOFF_DBC_MASK) >> PGOFF_DBC_SHIFT;
-
 	/* we shifted up by PAGE_SHIFT to make mmap happy, need to undo that */
-	handle >>= PAGE_SHIFT;
-	dbc_id >>= PAGE_SHIFT;
+	handle = req->handle >> PAGE_SHIFT & ~PGOFF_DBC_MASK;
+	dbc_id = (req->handle >> PAGE_SHIFT & PGOFF_DBC_MASK)
+		 >> PGOFF_DBC_SHIFT;
 
 	if (dbc_id != req_dbc_id)
 		return -EINVAL;
@@ -1406,15 +1404,13 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 	}
 
 	for (i = 0; i < count; i++) {
-		handle = exec[i].handle & ~PGOFF_DBC_MASK;
-		dbc_id = (exec[i].handle & PGOFF_DBC_MASK) >> PGOFF_DBC_SHIFT;
-
 		/*
 		 * we shifted up by PAGE_SHIFT to make mmap happy,
 		 * need to undo that
 		 */
-		handle >>= PAGE_SHIFT;
-		dbc_id >>= PAGE_SHIFT;
+		handle = exec[i].handle >> PAGE_SHIFT & ~PGOFF_DBC_MASK;
+		dbc_id = (exec[i].handle >> PAGE_SHIFT & PGOFF_DBC_MASK)
+			 >> PGOFF_DBC_SHIFT;
 
 		if (dbc_id != hdr->dbc_id) {
 			ret = -EINVAL;
@@ -1571,8 +1567,8 @@ read_fifo:
 int qaic_wait_exec_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 			 unsigned long arg)
 {
-	struct mem_handle *mem;
 	struct qaic_wait_exec *wait;
+	struct mem_handle *mem;
 	unsigned int timeout;
 	int handle;
 	int dbc_id;
@@ -1599,12 +1595,10 @@ int qaic_wait_exec_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 		goto free_wait;
 	}
 
-	handle = wait->handle & ~PGOFF_DBC_MASK;
-	dbc_id = (wait->handle & PGOFF_DBC_MASK) >> PGOFF_DBC_SHIFT;
-
 	/* we shifted up by PAGE_SHIFT to make mmap happy, need to undo that */
-	handle >>= PAGE_SHIFT;
-	dbc_id >>= PAGE_SHIFT;
+	handle = wait->handle >> PAGE_SHIFT & ~PGOFF_DBC_MASK;
+	dbc_id = (wait->handle >> PAGE_SHIFT & PGOFF_DBC_MASK)
+		 >> PGOFF_DBC_SHIFT;
 
 	if (dbc_id > QAIC_NUM_DBC) {
 		ret = -EINVAL;
