@@ -752,7 +752,7 @@ static int alloc_one_sgt_handle(struct qaic_device *qdev,
 	 * Try to allocate enough pages to cover the request.  High order pages
 	 * will be contiguous, which will be conducive to DMA.
 	 */
-	while (1) {
+	while (nr_pages > 0) {
 		order = min(get_order(nr_pages * PAGE_SIZE), max_order);
 		while (1) {
 			page = alloc_pages(GFP_KERNEL | GFP_HIGHUSER |
@@ -782,7 +782,6 @@ static int alloc_one_sgt_handle(struct qaic_device *qdev,
 					    (PAGE_SIZE << order) - buf_extra,
 					    0);
 			sg_mark_end(sg);
-			break;
 		}
 
 		ret = reserve_pages(page_to_pfn(page),
