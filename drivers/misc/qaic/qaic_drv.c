@@ -747,4 +747,4 @@ module_exit(qaic_exit);
 MODULE_AUTHOR("Qualcomm Cloud AI 100 Accelerator Kernel Driver Team");
 MODULE_DESCRIPTION("Qualcomm Cloud AI 100 Accelerators Driver");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("9.0.3"); /* MAJOR.MINOR.PATCH */
+MODULE_VERSION("9.0.4"); /* MAJOR.MINOR.PATCH */

@@ -726,7 +726,7 @@ static int alloc_one_sgt_handle(struct qaic_device *qdev,
 		 * later
 		 */
 		buf_extra = (PAGE_SIZE - size % PAGE_SIZE) % PAGE_SIZE;
-		max_order = min(MAX_ORDER, get_order(size));
+		max_order = min(MAX_ORDER - 1, get_order(size));
 	} else {
 		/* allocate a single page for book keeping */
 		nr_pages = 1;
