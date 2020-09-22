@@ -26,8 +26,6 @@
 #define CREATE_TRACE_POINTS
 #include "qaic_trace.h"
 
-#define PCI_VENDOR_ID_QUALCOMM		0x17cb
-
 #define PCI_DEV_AIC100			0xa100
 
 #define QAIC_NAME			"Qualcomm Cloud AI 100"
@@ -655,7 +653,7 @@ static struct mhi_driver qaic_mhi_driver = {
 };
 
 static const struct pci_device_id ids[] = {
-	{ PCI_DEVICE(PCI_VENDOR_ID_QUALCOMM, PCI_DEV_AIC100), },
+	{ PCI_DEVICE(PCI_VENDOR_ID_QCOM, PCI_DEV_AIC100), },
 	{ 0, }
 };
 MODULE_DEVICE_TABLE(pci, ids);
@@ -749,4 +747,4 @@ module_exit(qaic_exit);
 MODULE_AUTHOR("Qualcomm Cloud AI 100 Accelerator Kernel Driver Team");
 MODULE_DESCRIPTION("Qualcomm Cloud AI 100 Accelerators Driver");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("9.0.1"); /* MAJOR.MINOR.PATCH */
+MODULE_VERSION("9.0.2"); /* MAJOR.MINOR.PATCH */
