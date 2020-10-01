@@ -31,7 +31,7 @@
 #define QAIC_NAME			"Qualcomm Cloud AI 100"
 #define QAIC_MAX_MINORS			256
 
-static u16 cntl_major = 1;
+static u16 cntl_major = 2;
 static u16 cntl_minor = 0;
 static int qaic_major;
 static struct class *qaic_class;
@@ -755,4 +755,4 @@ module_exit(qaic_exit);
 MODULE_AUTHOR("Qualcomm Cloud AI 100 Accelerator Kernel Driver Team");
 MODULE_DESCRIPTION("Qualcomm Cloud AI 100 Accelerators Driver");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("9.1.1"); /* MAJOR.MINOR.PATCH */
+MODULE_VERSION("10.0.0"); /* MAJOR.MINOR.PATCH */

@@ -72,13 +72,15 @@ struct qaic_manage_trans_activate_to_dev {
 	struct qaic_manage_trans_hdr hdr;
 	__u32 queue_size; /* in number of elements */
 	__u32 eventfd;
-	__u64 resv; /* reserved for future use, must be 0 */
+	__u32 options;
+	__u32 pad; /* padding, must be 0 */
 };
 
 struct qaic_manage_trans_activate_from_dev {
 	struct qaic_manage_trans_hdr hdr;
 	__u32 status;
 	__u32 dbc_id; /* Identifier of assigned DMA Bridge channel */
+	__u64 options;
 };
 
 struct qaic_manage_trans_deactivate {

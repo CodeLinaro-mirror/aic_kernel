@@ -103,13 +103,14 @@ struct _trans_activate_to_dev {
 	u32 req_q_size;
 	u64 rsp_q_addr;
 	u32 rsp_q_size;
-	u32 reserved;
+	u32 options; /* unused, but BIT(16) has meaning to the device */
 } __packed;
 
 struct _trans_activate_from_dev {
 	struct _trans_hdr hdr;
 	u32 status;
 	u32 dbc_id;
+	u64 options; /* unused */
 } __packed;
 
 struct _trans_deactivate_from_dev {
@@ -540,8 +541,8 @@ static int encode_activate(struct qaic_device *qdev, void *trans,
 		return -EINVAL;
 	}
 
-	if (in_trans->resv) {
-		trace_encode_error(qdev, "activate non-zero resv");
+	if (in_trans->pad) {
+		trace_encode_error(qdev, "activate non-zero padding");
 		return -EINVAL;
 	}
 
@@ -584,6 +585,7 @@ static int encode_activate(struct qaic_device *qdev, void *trans,
 	out_trans->rsp_q_addr = cpu_to_le64(dma_addr + size - nelem *
 							get_dbc_rsp_elem_size());
 	out_trans->rsp_q_size = cpu_to_le32(nelem);
+	out_trans->options = cpu_to_le32(in_trans->options);
 
 	*user_len += in_trans->hdr.len;
 	msg->hdr.len += sizeof(*out_trans);
@@ -780,6 +782,7 @@ static int decode_activate(struct qaic_device *qdev, void *trans,
 	out_trans->hdr.len = len;
 	out_trans->status = le32_to_cpu(in_trans->status);
 	out_trans->dbc_id = le32_to_cpu(in_trans->dbc_id);
+	out_trans->options = le64_to_cpu(in_trans->options);
 
 	if (!resources->buf) {
 		trace_decode_error(qdev, "activate with no assigned resources");
