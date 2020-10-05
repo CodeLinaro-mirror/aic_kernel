@@ -1414,7 +1414,7 @@ int qaic_execute_ioctl(struct qaic_device *qdev, struct qaic_user *usr,
 		goto unlock_mem_lock;
 	}
 	queue_level = head <= tail ? tail - head :
-				     qdev->dbc[dbc_id].nelem - (head - tail);
+				qdev->dbc[hdr->dbc_id].nelem - (head - tail);
 
 	for (i = 0; i < count; i++) {
 		/*
