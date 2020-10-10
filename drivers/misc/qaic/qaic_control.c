@@ -338,8 +338,9 @@ static int encode_dma(struct qaic_device *qdev, void *trans,
 		goto out;
 	}
 
-	need_pages = PAGE_ALIGN(in_trans->size + offset_in_page(in_trans->addr) -
-				resources->xferred_dma_size) >> PAGE_SHIFT;
+	need_pages = DIV_ROUND_UP(in_trans->size + offset_in_page(in_trans->addr +
+				  resources->xferred_dma_size) -
+				  resources->xferred_dma_size, PAGE_SIZE);
 
 	nr_pages = need_pages;
 
