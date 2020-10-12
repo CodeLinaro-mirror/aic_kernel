@@ -1151,7 +1151,7 @@ static int qaic_manage(struct qaic_device *qdev, struct qaic_user *usr,
 {
 	struct _trans_dma_xfer_cont *dma_cont = NULL;
 	struct ioctl_resources resources;
-	struct _msg *rsp;
+	struct _msg *rsp = NULL;
 	int ret;
 
 	memset(&resources, 0, sizeof(struct ioctl_resources));
