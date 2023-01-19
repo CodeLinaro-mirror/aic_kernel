@@ -27,6 +27,7 @@
 #include <uapi/drm/qaic_accel.h>
 
 #include "mhi_controller.h"
+#include "mhi_qaic_ctrl.h"
 #include "qaic.h"
 #include "qaic_debugfs.h"
 #include "qaic_ras.h"
@@ -692,6 +693,10 @@ static int __init qaic_init(void)
 	if (ret)
 		pr_debug("qaic: qaic_telemetry_register failed %d\n", ret);
 
+	ret = mhi_qaic_ctrl_init();
+	if (ret)
+		pr_debug("qaic: mhi_qaic_ctrl_init failed %d\n", ret);
+
 	return 0;
 
 free_pci:
@@ -717,6 +722,7 @@ static void __exit qaic_exit(void)
 	 * reinitializing the link_up state after the cleanup is done.
 	 */
 	link_up = true;
+	mhi_qaic_ctrl_deinit();
 	qaic_telemetry_unregister();
 	qaic_ras_unregister();
 	qaic_ssr_unregister();
