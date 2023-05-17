@@ -127,6 +127,14 @@ struct dma_bridge_chan {
 	unsigned int		state;
 	/* Debugfs root directory for this DBC /sys/kernel/debug/accel/<minor_id>/dbc* */
 	struct dentry		*debugfs_root;
+	/*
+	 * Points to a book keeping struct maintained by MHI SSR device while
+	 * downloading a SSR crashdump. It is NULL when there no crashdump
+	 * downloading in progress.
+	 */
+	void			*dump_info;
+	/* true: This DBC is under sub system reset(SSR); false: Otherwise */
+	bool			in_ssr;
 };
 
 struct qaic_device {
@@ -182,6 +190,10 @@ struct qaic_device {
 	struct workqueue_struct	*bootlog_wq;
 	/* Synchronizes access of pages in MHI bootlog device */
 	struct mutex		bootlog_mutex;
+	/* MHI SSR channel device */
+	struct mhi_device	*ssr_ch;
+	/* Work queue for tasks related to MHI SSR device */
+	struct workqueue_struct	*ssr_wq;
 };
 
 struct qaic_drm_device {
@@ -329,6 +341,8 @@ int qaic_wait_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *file
 int qaic_perf_stats_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *file_priv);
 int qaic_detach_slice_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *file_priv);
 void irq_polling_work(struct work_struct *work);
+void dbc_enter_ssr(struct qaic_device *qdev, u32 dbc_id);
+void dbc_exit_ssr(struct qaic_device *qdev, u32 dbc_id);
 
 /* qaic_sysfs.c */
 int qaic_sysfs_init(struct qaic_drm_device *qddev);
