@@ -10,4 +10,5 @@ qaic-y := \
 	qaic_control.o \
 	qaic_data.o \
 	qaic_drv.o \
+	qaic_sysfs.o \
 	qaic_timesync.o
