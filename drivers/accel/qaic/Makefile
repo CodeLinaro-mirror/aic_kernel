@@ -12,3 +12,5 @@ qaic-y := \
 	qaic_drv.o \
 	qaic_sysfs.o \
 	qaic_timesync.o
+
+qaic-$(CONFIG_DEBUG_FS) += qaic_debugfs.o

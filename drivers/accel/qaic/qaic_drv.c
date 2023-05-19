@@ -28,6 +28,7 @@
 
 #include "mhi_controller.h"
 #include "qaic.h"
+#include "qaic_debugfs.h"
 #include "qaic_timesync.h"
 
 MODULE_IMPORT_NS(DMA_BUF);
@@ -210,6 +211,7 @@ static const struct drm_driver qaic_accel_driver = {
 	.fops			= &qaic_accel_fops,
 	.open			= qaic_open,
 	.postclose		= qaic_postclose,
+	.debugfs_init		= qaic_debugfs_init,
 
 	.ioctls			= qaic_drm_ioctls,
 	.num_ioctls		= ARRAY_SIZE(qaic_drm_ioctls),
@@ -392,6 +394,9 @@ static struct qaic_device *create_qdev(struct pci_dev *pdev, const struct pci_de
 	ret = drmm_mutex_init(drm, &qdev->cntl_mutex);
 	if (ret)
 		return NULL;
+	ret = drmm_mutex_init(drm, &qdev->bootlog_mutex);
+	if (ret)
+		return NULL;
 
 	qdev->cntl_wq = qaicm_wq_init(drm, "qaic_cntl");
 	if (IS_ERR(qdev->cntl_wq))
@@ -409,6 +414,7 @@ static struct qaic_device *create_qdev(struct pci_dev *pdev, const struct pci_de
 	qddev->qdev = qdev;
 
 	INIT_LIST_HEAD(&qdev->cntl_xfer_list);
+	INIT_LIST_HEAD(&qdev->bootlog);
 	INIT_LIST_HEAD(&qddev->users);
 
 	for (i = 0; i < qdev->num_dbc; ++i) {
@@ -422,6 +428,13 @@ static struct qaic_device *create_qdev(struct pci_dev *pdev, const struct pci_de
 		init_waitqueue_head(&qdev->dbc[i].dbc_release);
 		INIT_LIST_HEAD(&qdev->dbc[i].bo_lists);
 	}
+
+#ifdef CONFIG_DEBUG_FS
+	qddev->dbc_debugfs_list = drmm_kcalloc(to_drm(qddev), DBC_DEBUGFS_ENTRIES * qdev->num_dbc,
+					       sizeof(*qddev->dbc_debugfs_list), GFP_KERNEL);
+	if (!qddev->dbc_debugfs_list)
+		return NULL;
+#endif
 
 	return qdev;
 }
@@ -649,6 +662,10 @@ static int __init qaic_init(void)
 	if (ret)
 		pr_debug("qaic: qaic_timesync_init failed %d\n", ret);
 
+	ret = qaic_bootlog_register();
+	if (ret)
+		pr_debug("qaic: qaic_bootlog_register failed %d\n", ret);
+
 	return 0;
 
 free_pci:
@@ -674,6 +691,7 @@ static void __exit qaic_exit(void)
 	 * reinitializing the link_up state after the cleanup is done.
 	 */
 	link_up = true;
+	qaic_bootlog_unregister();
 	qaic_timesync_deinit();
 	mhi_driver_unregister(&qaic_mhi_driver);
 	pci_unregister_driver(&qaic_pci_driver);

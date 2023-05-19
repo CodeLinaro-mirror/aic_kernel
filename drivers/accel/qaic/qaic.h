@@ -7,6 +7,7 @@
 #ifndef _QAIC_H_
 #define _QAIC_H_
 
+#include <drm/drm_debugfs.h>
 #include <linux/interrupt.h>
 #include <linux/kref.h>
 #include <linux/mhi.h>
@@ -124,6 +125,8 @@ struct dma_bridge_chan {
 	struct work_struct	poll_work;
 	/* Represents various states of this DBC from enum dbc_states */
 	unsigned int		state;
+	/* Debugfs root directory for this DBC /sys/kernel/debug/accel/<minor_id>/dbc* */
+	struct dentry		*debugfs_root;
 };
 
 struct qaic_device {
@@ -171,6 +174,14 @@ struct qaic_device {
 	struct mhi_device	*qts_ch;
 	/* Work queue for tasks related to MHI "QAIC_TIMESYNC" channel */
 	struct workqueue_struct	*qts_wq;
+	/* Head of list of page allocated by MHI bootlog device */
+	struct list_head	bootlog;
+	/* MHI bootlog channel device */
+	struct mhi_device	*bootlog_ch;
+	/* Work queue for tasks related to MHI bootlog device */
+	struct workqueue_struct	*bootlog_wq;
+	/* Synchronizes access of pages in MHI bootlog device */
+	struct mutex		bootlog_mutex;
 };
 
 struct qaic_drm_device {
@@ -191,6 +202,8 @@ struct qaic_drm_device {
 	struct mutex		users_mutex;
 	/* Pointer to array of DBC sysfs attributes */
 	void			*sysfs_attrs;
+	/* Debugfs info list for all DBC */
+	struct drm_info_list	*dbc_debugfs_list;
 };
 
 struct qaic_bo {
@@ -300,6 +313,7 @@ int disable_dbc(struct qaic_device *qdev, u32 dbc_id, struct qaic_user *usr);
 void enable_dbc(struct qaic_device *qdev, u32 dbc_id, struct qaic_user *usr);
 void wakeup_dbc(struct qaic_device *qdev, u32 dbc_id);
 void release_dbc(struct qaic_device *qdev, u32 dbc_id);
+void qaic_data_get_fifo_info(struct dma_bridge_chan *dbc, u32 *head, u32 *tail);
 
 void wake_all_cntl(struct qaic_device *qdev);
 void qaic_dev_reset_clean_local_state(struct qaic_device *qdev);
