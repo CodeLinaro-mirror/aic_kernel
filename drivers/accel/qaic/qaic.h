@@ -194,6 +194,14 @@ struct qaic_device {
 	struct mhi_device	*ssr_ch;
 	/* Work queue for tasks related to MHI SSR device */
 	struct workqueue_struct	*ssr_wq;
+	/* MHI RAS channel device */
+	struct mhi_device	*ras_ch;
+	/* Correctable error count */
+	unsigned int		ce_count;
+	/* Un-correctable error count */
+	unsigned int		ue_count;
+	/* Un-correctable non-fatal error count */
+	unsigned int		ue_nf_count;
 };
 
 struct qaic_drm_device {
