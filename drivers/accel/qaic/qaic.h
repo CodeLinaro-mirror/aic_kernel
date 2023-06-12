@@ -202,6 +202,24 @@ struct qaic_device {
 	unsigned int		ue_count;
 	/* Un-correctable non-fatal error count */
 	unsigned int		ue_nf_count;
+	/* HW monitoring device for this device */
+	struct device		*hwmon;
+	/* MHI telemetry channel device */
+	struct mhi_device	*tele_ch;
+	/* Head in list of requests queued in MHI telemetry device */
+	struct list_head	tele_xfer_list;
+	/* Req. ID of request that will be queued next in MHI telemetry device */
+	u32			tele_next_seq_num;
+	/* Synchronizes MHI telemetry device transactions and its xfer list */
+	struct mutex		tele_mutex;
+	/*
+	 * TRUE: A tx MHI transaction has failed and a rx buffer is still queued
+	 * in telemetry device. Such a buffer is considered lost rx buffer
+	 * FALSE: No rx buffer is lost in telemetry device
+	 */
+	bool			tele_lost_buf;
+	/* Work queue for tasks related to MHI telemetry device */
+	struct workqueue_struct	*tele_wq;
 };
 
 struct qaic_drm_device {

@@ -31,6 +31,7 @@
 #include "qaic_debugfs.h"
 #include "qaic_ras.h"
 #include "qaic_ssr.h"
+#include "qaic_telemetry.h"
 #include "qaic_timesync.h"
 
 MODULE_IMPORT_NS(DMA_BUF);
@@ -344,6 +345,7 @@ static void qaic_notify_reset(struct qaic_device *qdev)
 	qdev->dev_state = QAIC_OFFLINE;
 	/* wake up any waiters to avoid waiting for timeouts at sync */
 	wake_all_cntl(qdev);
+	wake_all_telemetry(qdev);
 	for (i = 0; i < qdev->num_dbc; ++i)
 		wakeup_dbc(qdev, i);
 	synchronize_srcu(&qdev->dev_lock);
@@ -412,6 +414,9 @@ static struct qaic_device *create_qdev(struct pci_dev *pdev, const struct pci_de
 	qdev->ssr_wq = qaicm_wq_init(drm, "qaic_ssr");
 	if (IS_ERR(qdev->ssr_wq))
 		return NULL;
+	qdev->tele_wq = qaicm_wq_init(drm, "qaic_tele");
+	if (IS_ERR(qdev->tele_wq))
+		return NULL;
 
 	ret = qaicm_srcu_init(drm, &qdev->dev_lock);
 	if (ret)
@@ -423,6 +428,7 @@ static struct qaic_device *create_qdev(struct pci_dev *pdev, const struct pci_de
 
 	INIT_LIST_HEAD(&qdev->cntl_xfer_list);
 	INIT_LIST_HEAD(&qdev->bootlog);
+	INIT_LIST_HEAD(&qdev->tele_xfer_list);
 	INIT_LIST_HEAD(&qddev->users);
 
 	for (i = 0; i < qdev->num_dbc; ++i) {
@@ -682,6 +688,10 @@ static int __init qaic_init(void)
 	if (ret)
 		pr_debug("qaic: qaic_ras_register failed %d\n", ret);
 
+	ret = qaic_telemetry_register();
+	if (ret)
+		pr_debug("qaic: qaic_telemetry_register failed %d\n", ret);
+
 	return 0;
 
 free_pci:
@@ -707,6 +717,7 @@ static void __exit qaic_exit(void)
 	 * reinitializing the link_up state after the cleanup is done.
 	 */
 	link_up = true;
+	qaic_telemetry_unregister();
 	qaic_ras_unregister();
 	qaic_ssr_unregister();
 	qaic_bootlog_unregister();

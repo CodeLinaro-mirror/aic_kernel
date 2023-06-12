@@ -16,3 +16,4 @@ qaic-y := \
 	qaic_timesync.o
 
 qaic-$(CONFIG_DEBUG_FS) += qaic_debugfs.o
+qaic-$(CONFIG_DRM_QAIC_HWMON) += qaic_telemetry.o

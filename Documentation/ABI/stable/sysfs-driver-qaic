@@ -36,3 +36,87 @@ Contact:	Pranjal Ramajor Asha Kanojiya <quic_pkanojiy@quicinc.com>
 Description:	Number of uncorrectable non-fatal errors received from device since driver
 		is loaded.
 Users:		Any userspace application or clients interested in device info.
+
+What:		/sys/bus/pci/drivers/qaic/XXXX:XX:XX.X/hwmon/hwmon<N>/reset_config
+Date:		July 2023
+KernelVersion:	6.4
+Contact:	Jeffrey Hugo <quic_jhugo@quicinc.com>
+Description:	Show and set the reset configuration of QSM. Below are the supported
+		configurations,
+		1 - Warm reset with crashdump
+		2 - Warm reset without crashdump
+		3 - Graceful shutdown
+Users:		Any userspace application or clients interested to view or reset device.
+
+What:		/sys/bus/pci/drivers/qaic/XXXX:XX:XX.X/hwmon/hwmon<N>/reset_initiate
+Date:		July 2023
+KernelVersion:	6.4
+Contact:	Jeffrey Hugo <quic_jhugo@quicinc.com>
+Description:	Write only file causes the QSM to initiate the configured reset.
+Users:		Any userspace application or clients interested to reset device.
+
+What:		/sys/bus/pci/drivers/qaic/XXXX:XX:XX.X/hwmon/hwmon<N>/power_level
+Date:		July 2023
+KernelVersion:	6.4
+Contact:	Jeffrey Hugo <quic_jhugo@quicinc.com>
+Description:	Show the current configured power level. Allows the level to be set to a
+		different level. The power levels are:
+		1 - full power
+		2 - reduced power
+		3 - minimal power
+		Configuring a different power level impacts the permitted power consumption
+		of the device, and thus may impact the performance of the device.
+Users:		Any userspace application or clients interested to view or change this
+		device configuration.
+
+What:		/sys/bus/pci/drivers/qaic/XXXX:XX:XX.X/hwmon/hwmon<N>/temp_pmicA_input
+Date:		July 2023
+KernelVersion:	6.4
+Contact:	Jeffrey Hugo <quic_jhugo@quicinc.com>
+Description:	Reads the temp of the "A" PMIC on the board.
+Users:		Any userspace application or clients interested in this device info.
+
+What:		/sys/bus/pci/drivers/qaic/XXXX:XX:XX.X/hwmon/hwmon<N>/temp_pmicC_input
+Date:		July 2023
+KernelVersion:	6.4
+Contact:	Jeffrey Hugo <quic_jhugo@quicinc.com>
+Description:	Read the temp of the "C" PMIC on the board.
+Users:		Any userspace application or clients interested in this device info.
+
+What:		/sys/bus/pci/drivers/qaic/XXXX:XX:XX.X/hwmon/hwmon<N>/temp_pmicE_input
+Date:		July 2023
+KernelVersion:	6.4
+Contact:	Jeffrey Hugo <quic_jhugo@quicinc.com>
+Description:	Read the temp of the "E" PMIC on the board.
+Users:		Any userspace application or clients interested in this device info.
+
+What:		/sys/bus/pci/drivers/qaic/XXXX:XX:XX.X/hwmon/hwmon<N>/throttle_percent
+Date:		July 2023
+KernelVersion:	6.4
+Contact:	Jeffrey Hugo <quic_jhugo@quicinc.com>
+Description:	Show the percent of performance throttling the device is imposing to meet
+		the configured limits - ie thermal, power, etc limits. Value is 0 to 100 (%).
+Users:		Any userspace application or clients interested in this device info.
+
+What:		/sys/bus/pci/drivers/qaic/XXXX:XX:XX.X/hwmon/hwmon<N>/throttle_time
+Date:		July 2023
+KernelVersion:	6.4
+Contact:	Jeffrey Hugo <quic_jhugo@quicinc.com>
+Description:	Show the number of seconds device has been in a throttled state were
+		performance has been limited due to thermal, power, or other thresholds.
+Users:		Any userspace application or clients interested in this device info.
+
+What:		/sys/bus/pci/drivers/qaic/XXXX:XX:XX.X/hwmon/hwmon<N>/tops
+Date:		July 2023
+KernelVersion:	6.4
+Contact:	Jeffrey Hugo <quic_jhugo@quicinc.com>
+Description:	R/W the Tera Operations Per Second (tops) limiter for the device
+Users:		Any userspace application or clients interested to view or change this
+		device configuration.
+
+What:		/sys/bus/pci/drivers/qaic/XXXX:XX:XX.X/hwmon/hwmon<N>/uptime
+Date:		July 2023
+KernelVersion:	6.4
+Contact:	Jeffrey Hugo <quic_jhugo@quicinc.com>
+Description:	Device uptime (in seconds) since last boot
+Users:		Any userspace application or clients interested in this device info.
