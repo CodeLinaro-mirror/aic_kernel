@@ -426,9 +426,11 @@ static void mhi_qaic_ctrl_ul_xfer_cb(struct mhi_device *mhi_dev, struct mhi_resu
 		mhi_result->transaction_status, mhi_result->bytes_xferd);
 
 	kfree(mhi_result->buf_addr);
+	wake_up_interruptible(&mqcdev->ul_wq);
 
-	if (!mhi_result->transaction_status)
-		wake_up_interruptible(&mqcdev->ul_wq);
+	if (mhi_result->transaction_status)
+		dev_err_ratelimited(&mhi_dev->dev, "%s: write() failed. Error: %d\n", __func__,
+				    mhi_result->transaction_status);
 }
 
 static void mhi_qaic_ctrl_dl_xfer_cb(struct mhi_device *mhi_dev, struct mhi_result *mhi_result)
