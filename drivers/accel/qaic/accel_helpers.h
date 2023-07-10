@@ -1,6 +1,7 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-
-/* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved. */
+/* SPDX-License-Identifier: GPL-2.0-only
+ *
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ */
 
 #ifndef _QAIC_ACCEL_HELPERS
 #define _QAIC_ACCEL_HELPERS
@@ -20,6 +21,8 @@
 			(RHEL_MAJOR == 8) && (RHEL_MINOR >=3)))
 #include <drm/drmP.h>
 #endif
+#include <linux/module.h>
+#include <linux/slab.h>
 
 #include "qaic.h"
 
@@ -74,37 +77,310 @@ struct drm_prime_member {
 	struct rb_node handle_rb;
 };
 
-int accel_init(void);
-void accel_exit(void);
-void accel_minor_remove(int index);
-int accel_minor_alloc(void);
-void accel_minor_replace(struct drm_minor *minor, int index);
-void accel_set_device_instance_params(struct device *kdev, int index);
-int accel_open(struct inode *inode, struct file *filp);
-void accel_debugfs_init(struct drm_minor *minor, int minor_id);
+static int accel_init(void);
+static void accel_exit(void);
+static void accel_minor_remove(int index);
+static int accel_minor_alloc(void);
+static void accel_minor_replace(struct drm_minor *minor, int index);
+static void accel_set_device_instance_params(struct device *kdev, int index);
+static int accel_open(struct inode *inode, struct file *filp);
+static void accel_debugfs_init(struct drm_minor *minor, int minor_id);
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 5, 0))
 static int accel_gem_mmap(struct file *filp, struct vm_area_struct *vma);
 #endif
-void drm_prime_remove_buf_handle(struct drm_prime_file_private *prime_fpriv,
+static void drm_prime_remove_buf_handle(struct drm_prime_file_private *prime_fpriv,
 				 uint32_t handle);
-void drm_gem_open(struct drm_device *dev, struct drm_file *file_private);
-void drm_gem_release(struct drm_device *dev, struct drm_file *file_private);
-void drm_file_free(struct drm_file *file);
-void drm_prime_init_file_private(struct drm_prime_file_private *prime_fpriv);
-struct drm_file *drm_file_alloc(struct drm_minor *minor);
-int drm_open_helper(struct file *filp, struct drm_minor *minor);
-void drm_managed_release(struct drm_device *dev);
+static void drm_gem_open(struct drm_device *dev, struct drm_file *file_private);
+static void drm_gem_release(struct drm_device *dev, struct drm_file *file_private);
+static void drm_file_free(struct drm_file *file);
+static void drm_prime_init_file_private(struct drm_prime_file_private *prime_fpriv);
+static struct drm_file *drm_file_alloc(struct drm_minor *minor);
+static int drm_open_helper(struct file *filp, struct drm_minor *minor);
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0) && \
+		!(defined(CONFIG_SUSE_VERSION) && \
+			CONFIG_SUSE_VERSION == 15 && CONFIG_SUSE_PATCHLEVEL >= 3) && \
+		!(defined(RHEL_MAJOR) && \
+			RHEL_MAJOR == 8 && RHEL_MINOR >= 4))
+#define _QAIC_DRM_MANAGED
+#endif
+
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 19, 0) && !defined(_QAIC_DRM_MANAGED) && \
+		!(defined(RHEL_MAJOR) && RHEL_MAJOR == 8 && RHEL_MINOR >= 8) && \
+		!(defined(RHEL_MAJOR) && RHEL_MAJOR == 9 && RHEL_MINOR >= 2))
+static void drmm_mutex_release(struct drm_device *dev, void *res)
+{
+	struct mutex *lock = res;
+
+	mutex_destroy(lock);
+}
+
+static int drmm_mutex_init(struct drm_device *dev, struct mutex *lock)
+{
+	mutex_init(lock);
+
+	return drmm_add_action_or_reset(dev, drmm_mutex_release, lock);
+}
+#endif
+
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0) && \
+		!(defined(CONFIG_SUSE_VERSION) && \
+			CONFIG_SUSE_VERSION == 15 && CONFIG_SUSE_PATCHLEVEL >= 3) && \
+		!(defined(RHEL_MAJOR) && \
+			RHEL_MAJOR == 8 && RHEL_MINOR >= 4))
+typedef void (*drmres_release_t)(struct drm_device *dev, void *res);
+
+struct drmres_node {
+	struct list_head	entry;
+	drmres_release_t	release;
+	const char		*name;
+	size_t			size;
+};
+
+struct drmres {
+	struct drmres_node			node;
+	/*
+	 * Some archs want to perform DMA into kmalloc caches
+	 * and need a guaranteed alignment larger than
+	 * the alignment of a 64-bit integer.
+	 * Thus we use ARCH_KMALLOC_MINALIGN here and get exactly the same
+	 * buffer alignment as if it was allocated by plain kmalloc().
+	 */
+	u8 __aligned(ARCH_KMALLOC_MINALIGN)	data[];
+};
+
+static void free_dr(struct drmres *dr)
+{
+	kfree_const(dr->node.name);
+	kfree(dr);
+}
+
+static void qaicm_managed_release(struct drm_device *dev)
+{
+	struct drmres *dr, *tmp;
+	struct qaic_drm_device *qddev = to_qaic_drm_device(dev);
+
+	if (!qddev)
+		return;
+
+	list_for_each_entry_safe(dr, tmp, &qddev->managed.resources, node.entry) {
+		if (dr->node.release)
+			dr->node.release(dev, dr->node.size? *(void **)&dr->data : NULL);
+
+		list_del(&dr->node.entry);
+		free_dr(dr);
+	}
+}
+
+static __always_inline struct drmres *alloc_dr(drmres_release_t release,
+					       size_t size, gfp_t gfp, int nid)
+{
+	size_t tot_size;
+	struct drmres *dr;
+
+	/* We must catch any near-SIZE_MAX cases that could overflow. */
+	if (unlikely(check_add_overflow(sizeof(*dr), size, &tot_size)))
+		return NULL;
+
+	/*
+	 * backport notes:
+	 * this was originally a call to 'kmalloc_node_track_caller' however it seems most 5.4
+	 * kernels do not have that in their Module.symvers. '__kmalloc_node' ends up calling the
+	 * same function (__do_kmalloc_node) with the same arguments as the original function would.
+	 */
+	dr = __kmalloc_node(tot_size, gfp, nid);
+	if (unlikely(!dr))
+		return NULL;
+
+	memset(dr, 0, offsetof(struct drmres, data));
+
+	INIT_LIST_HEAD(&dr->node.entry);
+	dr->node.release = release;
+	dr->node.size = size;
+
+	return dr;
+}
+
+static void del_dr(struct drm_device *dev, struct drmres *dr)
+{
+	list_del_init(&dr->node.entry);
+}
+
+static void add_dr(struct drm_device *dev, struct drmres *dr)
+{
+	struct qaic_drm_device *qddev = to_qaic_drm_device(dev);
+	unsigned long flags;
+
+	WARN_ON(!qddev);
+
+	spin_lock_irqsave(&qddev->managed.lock, flags);
+	list_add(&dr->node.entry, &qddev->managed.resources);
+	spin_unlock_irqrestore(&qddev->managed.lock, flags);
+}
+
+static void qaicm_add_final_kfree(struct drm_device *dev, void *container)
+{
+	WARN_ON(to_qaic_drm_device(dev)->managed.final_kfree);
+	WARN_ON(dev < (struct drm_device *) container);
+	WARN_ON(dev + 1 > (struct drm_device *) (container + ksize(container)));
+	to_qaic_drm_device(dev)->managed.final_kfree = container;
+}
+
+static int __qaicm_add_action(struct drm_device *dev, drmres_release_t action, void *data, const char *name)
+{
+	struct drmres *dr;
+	void **void_ptr;
+
+	dr = alloc_dr(action, data ? sizeof(void*) : 0, GFP_KERNEL | __GFP_ZERO, dev_to_node(dev->dev));
+	if (!dr) {
+		dev_dbg(dev->dev, "failed to add action %s for %p\n", name, data);
+		return -ENOMEM;
+	}
+
+	dr->node.name = kstrdup_const(name, GFP_KERNEL);
+	if (data) {
+		void_ptr = (void **) &dr->data;
+		*void_ptr = data;
+
+	}
+
+	add_dr(dev, dr);
+
+	return 0;
+}
+
+static int __qaicm_add_action_or_reset(struct drm_device *dev, drmres_release_t action, void *data, const char *name)
+{
+	int ret;
+
+	ret = __qaicm_add_action(dev, action, data, name);
+	if (ret)
+		action(dev, data);
+
+	return ret;
+}
+
+static void qaicm_dev_release(struct drm_device *dev)
+{
+	struct qaic_drm_device *qddev = to_qaic_drm_device(dev);
+
+	qaicm_managed_release(dev); //free all the resources we've alloc'd
+	kfree(qddev->managed.final_kfree); //free drm dev
+}
+
+static void *qaicm_kmalloc(struct drm_device *dev, size_t size, gfp_t gfp)
+{
+	struct drmres *dr;
+
+	dr = alloc_dr(NULL, size, gfp, dev_to_node(dev->dev));
+	if (!dr) {
+		dev_dbg(dev->dev, "failed to allocate %zu bytes, %u flags\n", size, gfp);
+		return NULL;
+	}
+	dr->node.name = kstrdup_const("kmalloc", GFP_KERNEL);
+
+	add_dr(dev, dr);
+
+	return dr->data;
+}
+
+static void *qaicm_kzalloc(struct drm_device *dev, size_t size, gfp_t flags)
+{
+	return qaicm_kmalloc(dev, size, flags | __GFP_ZERO);
+}
+
+static inline void *qaicm_kmalloc_array(struct drm_device *dev, size_t n, size_t size, gfp_t flags)
+{
+	size_t bytes;
+
+	if(unlikely(check_mul_overflow(n, size, &bytes)))
+		return NULL;
+
+	return qaicm_kmalloc(dev, bytes, flags);
+}
+
+static void *qaicm_kcalloc(struct drm_device *dev, size_t n, size_t size, gfp_t flags)
+{
+	return qaicm_kmalloc_array(dev, n, size, flags | __GFP_ZERO);
+}
+
+static void qaicm_kfree(struct drm_device *dev, void *data)
+{
+	struct qaic_drm_device *qddev = to_qaic_drm_device(dev);
+	struct drmres *dr_match = NULL, *dr;
+	unsigned long flags;
+
+	if (!data)
+		return;
+
+	spin_lock_irqsave(&qddev->managed.lock, flags);
+	list_for_each_entry(dr, &qddev->managed.resources, node.entry) {
+		if (dr->data == data) {
+			dr_match = dr;
+			del_dr(dev, dr_match);
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&qddev->managed.lock, flags);
+
+	if (WARN_ON(!dr_match))
+		return;
+
+	free_dr(dr_match);
+}
+
+static void qaicm_mutex_release(struct drm_device *drm, void *res)
+{
+	struct mutex *lock = res;
+	mutex_destroy(lock);
+}
+
+static int qaicm_mutex_init(struct drm_device *dev, struct mutex *lock)
+{
+	mutex_init(lock);
+
+	return __qaicm_add_action_or_reset(dev, qaicm_mutex_release, lock, "qaicm_mutex_release");
+}
+
+static inline void drmm_kfree(struct drm_device *dev, void *ptr)
+{
+	qaicm_kfree(dev, ptr);
+}
+
+static inline void *drmm_kmalloc(struct drm_device *dev, size_t size, gfp_t flags)
+{
+	return qaicm_kmalloc(dev, size, flags);
+}
+
+static inline void* drmm_kzalloc(struct drm_device *dev, size_t size, gfp_t flags)
+{
+	return qaicm_kzalloc(dev, size, flags);
+}
+
+static inline void *drmm_kcalloc(struct drm_device *dev, size_t num, size_t size, gfp_t flags)
+{
+	return qaicm_kcalloc(dev, num, size, flags);
+}
+
+static inline int drmm_mutex_init(struct drm_device *dev, struct mutex *lock)
+{
+	return qaicm_mutex_init(dev, lock);
+}
+
+#define drmm_add_action(dev, action, data) __qaicm_add_action(dev, action, data, #action)
+#define drmm_add_action_or_reset(dev, action, data) __qaicm_add_action_or_reset(dev, action, data, #action)
+
+#endif /* end QAIC_DRM_MANAGED */
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 5, 0))
-int qaic_accel_gem_object_mmap(struct drm_gem_object *obj, struct vm_area_struct *vma);
+static int qaic_accel_gem_object_mmap(struct drm_gem_object *obj, struct vm_area_struct *vma);
 #endif
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0) && \
 		!(defined(RHEL_MAJOR) && \
 			(RHEL_MAJOR == 8) && (RHEL_MINOR >= 1)))
-void qaic_accel_free_object(struct drm_gem_object *obj);
+static void qaic_accel_free_object(struct drm_gem_object *obj);
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16 ,0))
-void qaic_accel_gem_print_info(struct drm_printer *p, unsigned int indent,
+static void qaic_accel_gem_print_info(struct drm_printer *p, unsigned int indent,
 				const struct drm_gem_object *obj);
 #endif /* end >=4.16.0 */
 #endif /* end <5.0.0 */
@@ -218,7 +494,7 @@ static void drm_events_release(struct drm_file *file_priv)
 	spin_unlock_irqrestore(&dev->event_lock, flags);
 }
 
-void drm_prime_remove_buf_handle(struct drm_prime_file_private *prime_fpriv,
+static void drm_prime_remove_buf_handle(struct drm_prime_file_private *prime_fpriv,
 				 uint32_t handle)
 {
 	struct rb_node *rb;
@@ -306,7 +582,7 @@ static int drm_gem_object_release_handle(int id, void *ptr, void *data)
 	return 0;
 }
 
-void drm_gem_open(struct drm_device *dev, struct drm_file *file_private)
+static void drm_gem_open(struct drm_device *dev, struct drm_file *file_private)
 {
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0))
 	idr_init(&file_private->object_idr);
@@ -316,14 +592,14 @@ void drm_gem_open(struct drm_device *dev, struct drm_file *file_private)
 	spin_lock_init(&file_private->table_lock);
 }
 
-void drm_gem_release(struct drm_device *dev, struct drm_file *file_private)
+static void drm_gem_release(struct drm_device *dev, struct drm_file *file_private)
 {
 	idr_for_each(&file_private->object_idr,
 		     &drm_gem_object_release_handle, file_private);
 	idr_destroy(&file_private->object_idr);
 }
 
-void drm_file_free(struct drm_file *file)
+static void drm_file_free(struct drm_file *file)
 {
 	struct drm_device *dev;
 
@@ -362,14 +638,14 @@ void drm_file_free(struct drm_file *file)
 	kfree(file);
 }
 
-void drm_prime_init_file_private(struct drm_prime_file_private *prime_fpriv)
+static void drm_prime_init_file_private(struct drm_prime_file_private *prime_fpriv)
 {
 	mutex_init(&prime_fpriv->lock);
 	prime_fpriv->dmabufs = RB_ROOT;
 	prime_fpriv->handles = RB_ROOT;
 }
 
-struct drm_file *drm_file_alloc(struct drm_minor *minor)
+static struct drm_file *drm_file_alloc(struct drm_minor *minor)
 {
 	struct drm_device *dev = minor->dev;
 	struct drm_file *file;
@@ -427,7 +703,7 @@ out_prime_destroy:
 	return ERR_PTR(ret);
 }
 
-int drm_open_helper(struct file *filp, struct drm_minor *minor)
+static int drm_open_helper(struct file *filp, struct drm_minor *minor)
 {
 	struct drm_device *dev = minor->dev;
 	struct drm_file *priv;
@@ -501,7 +777,7 @@ static const struct drm_info_list accel_debugfs_list[] = {
   * a root directory for the minor in debugfs. It also creates common files
   * for accelerators and calls the driver's debugfs init callback.
   */
-void accel_debugfs_init(struct drm_minor *minor, int minor_id)
+static void accel_debugfs_init(struct drm_minor *minor, int minor_id)
 {
 	struct drm_device *dev = minor->dev;
 	char name[64];
@@ -579,6 +855,7 @@ static void qaic_accel_minor_unregister(struct drm_minor *minor)
 
 	accel_minor_replace(NULL, minor->index);
 	device_del(minor->kdev);
+	dev_set_drvdata(minor->kdev, NULL);
 	accel_debugfs_cleanup(minor);
 }
 
@@ -591,14 +868,14 @@ static void qaic_accel_minor_unregister(struct drm_minor *minor)
  * the device's minor number. In addition, it sets the class and type of the
  * device instance to the accel sysfs class and device type, respectively.
  */
-void accel_set_device_instance_params(struct device *kdev, int index)
+static void accel_set_device_instance_params(struct device *kdev, int index)
 {
 	kdev->devt = MKDEV(ACCEL_MAJOR, index);
 	kdev->class = accel_class;
 	kdev->type = &accel_sysfs_device_minor;
 }
 
-int accel_minor_alloc(void)
+static int accel_minor_alloc(void)
 {
 	unsigned long flags;
 	int r;
@@ -610,7 +887,7 @@ int accel_minor_alloc(void)
 	return r;
 }
 
-void accel_minor_remove(int index)
+static void accel_minor_remove(int index)
 {
 	unsigned long flags;
 
@@ -619,7 +896,7 @@ void accel_minor_remove(int index)
 	spin_unlock_irqrestore(&accel_minor_lock, flags);
 }
 
-void accel_minor_replace(struct drm_minor *accel_minor, int index)
+static void accel_minor_replace(struct drm_minor *accel_minor, int index)
 {
 	unsigned long flags;
 
@@ -692,7 +969,7 @@ static void accel_sysfs_release(struct device *dev)
 	kfree(dev);
 }
 
-int accel_open(struct inode *inode, struct file *filp)
+static int accel_open(struct inode *inode, struct file *filp)
 {
 	struct drm_device *dev;
 	struct drm_minor *minor;
@@ -774,8 +1051,6 @@ static void qaic_drm_accel_free(struct qaic_drm_device *qddev)
 		return;
 
 	accel_minor_device_release(qddev->accel->index);
-
-	kfree(qddev->accel);
 	qddev->accel = NULL;
 }
 
@@ -791,29 +1066,48 @@ static void qaic_accel_cleanup(struct qaic_device *qdev)
 			CONFIG_SUSE_VERSION == 15 && CONFIG_SUSE_PATCHLEVEL >= 3) && \
 		!(defined(RHEL_MAJOR) && \
 			RHEL_MAJOR == 8 && RHEL_MINOR >= 4))
-struct qaic_drm_device *qaic_accel_drm_dev_alloc(const struct drm_driver *driver,
+static void devm_qaic_dev_init_release(void *data)
+{
+	drm_dev_put(data);
+}
+
+static void qaicm_drm_dev_init_release(struct drm_device *dev, void *res)
+{
+	drm_dev_fini(dev);
+}
+
+static struct qaic_drm_device *qaic_accel_drm_dev_alloc(const struct drm_driver *driver,
 							struct device *parent) {
 	struct qaic_drm_device *qddev;
-	struct drm_device *ddev;
+	int ret;
 
 	qddev = kzalloc(sizeof(*qddev), GFP_KERNEL);
-	if (!qddev) {
-		qddev = ERR_PTR(-ENOMEM);
-		goto error_exit;
-	}
+	if (!qddev)
+		return ERR_PTR(-ENOMEM);
 
-	ddev = drm_dev_alloc(driver, parent);
-	if (IS_ERR(ddev)) {
-		kfree(qddev);
-		qddev = (struct qaic_drm_device *) ddev;
+	ret = drm_dev_init(to_drm(qddev), driver, parent);
+	if (ret)
 		goto error_exit;
-	}
-	ddev->dev_private = qddev;
-	qddev->ddev = ddev;
-error_exit:
+
+	INIT_LIST_HEAD(&qddev->managed.resources);
+	spin_lock_init(&qddev->managed.lock);
+
+	ret = __qaicm_add_action_or_reset(to_drm(qddev), qaicm_drm_dev_init_release, NULL,
+					  "qaicm_drm_dev_init_release");
+	if (ret)
+		goto error_exit;
+
+	ret = devm_add_action_or_reset(parent, devm_qaic_dev_init_release, to_drm(qddev));
+	if (ret)
+		goto error_exit;
+
+	qaicm_add_final_kfree(to_drm(qddev), qddev);
 	return qddev;
+error_exit:
+	kfree(qddev);
+	return ERR_PTR(ret);
 }
-#endif
+#endif /* Managed Memory backport */
 
 static int accel_alloc(struct qaic_drm_device *qddev)
 {
@@ -821,35 +1115,29 @@ static int accel_alloc(struct qaic_drm_device *qddev)
 	int ret;
 
 	/* drm_minor_alloc(accel) stuff */
-	acc_minor = kzalloc(sizeof(*acc_minor), GFP_KERNEL);
+	acc_minor = drmm_kzalloc(to_drm(qddev), sizeof(*acc_minor), GFP_KERNEL);
 	if (!acc_minor)
 		return -ENOMEM;
 
 	acc_minor->type = 32; /* the DRM_MINOR_ACCEL type (but not defined locally since we're acting as Render too) */
 
-	acc_minor->dev = to_drm_from_qddev(qddev);
+	acc_minor->dev = to_drm(qddev);
 
 	idr_preload(GFP_KERNEL);
 	ret = accel_minor_alloc();
 	idr_preload_end();
 	if (ret < 0)
-		goto idr_alloc_fail;
+		goto accel_fail;
 
 	acc_minor->index = ret;
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0) || \
-		(defined(CONFIG_SUSE_VERSION) && \
-			CONFIG_SUSE_VERSION == 15 && CONFIG_SUSE_PATCHLEVEL >= 3) || \
-		(defined(RHEL_MAJOR) && \
-			RHEL_MAJOR == 8 && RHEL_MINOR >= 4))
-	ret = drmm_add_action_or_reset(&qddev->drm, accel_minor_alloc_release, acc_minor);
+	ret = drmm_add_action_or_reset(to_drm(qddev), accel_minor_alloc_release, acc_minor);
 	if (ret)
-		goto dev_alloc_fail;
-#endif
+		goto accel_fail;
 	/* do drm_sysfs_minor_alloc() stuff */
 	acc_minor->kdev = kzalloc(sizeof(struct device), GFP_KERNEL);
 	if (!acc_minor->kdev) {
 		ret = -ENOMEM;
-		goto dev_alloc_fail;
+		goto accel_fail;
 	}
 
 	device_initialize(acc_minor->kdev);
@@ -862,31 +1150,14 @@ static int accel_alloc(struct qaic_drm_device *qddev)
 	dev_set_drvdata(acc_minor->kdev, acc_minor);
 	ret = dev_set_name(acc_minor->kdev, "accel%d", acc_minor->index);
 	if (ret < 0) {
-		goto dev_set_fail;
+		goto accel_fail;
 	}
 
 	/* finished with drm_sysfs_minor_alloc */
 	qddev->accel = acc_minor;
 	return 0;
 
-dev_set_fail:
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0) && \
-		!(defined(CONFIG_SUSE_VERSION) && \
-			CONFIG_SUSE_VERSION == 15 && CONFIG_SUSE_PATCHLEVEL >= 3) && \
-		!(defined(RHEL_MAJOR) && \
-			RHEL_MAJOR == 8 && RHEL_MINOR >= 4))
-	put_device(acc_minor->kdev);
-#endif
-dev_alloc_fail:
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0) && \
-		!(defined(CONFIG_SUSE_VERSION) && \
-			CONFIG_SUSE_VERSION == 15 && CONFIG_SUSE_PATCHLEVEL >= 3) && \
-		!(defined(RHEL_MAJOR) && \
-			RHEL_MAJOR == 8 && RHEL_MINOR >= 4))
-	accel_minor_remove(acc_minor->index);
-#endif
-idr_alloc_fail:
-	kfree(acc_minor);
+accel_fail:
 	return ret;
 }
 
@@ -909,7 +1180,7 @@ static void accel_sysfs_destroy(void)
 	accel_class = NULL;
 }
 
-int accel_init(void)
+static int accel_init(void)
 {
 	int ret;
 
@@ -936,14 +1207,13 @@ error:
 	return ret;
 }
 
-void accel_exit(void)
+static void accel_exit(void)
 {
 	unregister_chrdev(ACCEL_MAJOR, "accel");
 	debugfs_remove(accel_debugfs_root);
 	accel_sysfs_destroy();
 	idr_destroy(&accel_minors_idr);
 }
-
 #endif //end LINUX_VERSION_CODE < 6.2.0
 
 #endif //end _QAIC_ACCEL_HELPERS
