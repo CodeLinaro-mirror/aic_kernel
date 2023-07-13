@@ -26,6 +26,7 @@
 #include <uapi/drm/qaic_accel.h>
 
 #include "qaic.h"
+#include "qaic_trace.h"
 
 #define MANAGE_MAGIC_NUMBER		((__force __le32)0x43494151) /* "QAIC" in little endian */
 #define QAIC_DBC_Q_GAP			SZ_256
@@ -361,20 +362,30 @@ static int encode_passthrough(struct qaic_device *qdev, void *trans, struct wrap
 	struct wire_msg *msg;
 	u32 msg_hdr_len;
 
+	trace_qaic_encode_passthrough(qdev->qddev, in_trans);
+
 	wrapper = list_first_entry(&wrappers->list, struct wrapper_msg, list);
 	msg = &wrapper->msg;
 	msg_hdr_len = le32_to_cpu(msg->hdr.len);
 
-	if (in_trans->hdr.len % 8 != 0)
+	if (in_trans->hdr.len % 8 != 0) {
+		trace_qaic_encode_1(qdev->qddev, "Invalid transaction message length %llu of passthrough data.",
+				    in_trans->hdr.len);
 		return -EINVAL;
+	}
 
-	if (size_add(msg_hdr_len, in_trans->hdr.len) > QAIC_MANAGE_EXT_MSG_LENGTH)
+	if (size_add(msg_hdr_len, in_trans->hdr.len) > QAIC_MANAGE_EXT_MSG_LENGTH) {
+		trace_qaic_encode_2(qdev->qddev, "No space left in message buffer. Currrent passthrough msg size %llu offset is %llu.",
+				    in_trans->hdr.len, msg_hdr_len);
 		return -ENOSPC;
+	}
 
 	trans_wrapper = add_wrapper(wrappers,
 				    offsetof(struct wrapper_msg, trans) + in_trans->hdr.len);
-	if (!trans_wrapper)
+	if (!trans_wrapper) {
+		trace_qaic_encode(qdev->qddev, "passthrough: failed to allocate wrapper.", -ENOMEM);
 		return -ENOMEM;
+	}
 	trans_wrapper->len = in_trans->hdr.len;
 	out_trans = (struct wire_trans_passthrough *)&trans_wrapper->trans;
 
@@ -425,16 +436,22 @@ static int find_and_map_user_pages(struct qaic_device *qdev,
 		page_list = kmalloc_array(nr_pages, sizeof(*page_list), GFP_KERNEL | __GFP_NOWARN);
 		if (!page_list) {
 			nr_pages = nr_pages / 2;
-			if (!nr_pages)
+			if (!nr_pages) {
+				trace_qaic_encode(qdev->qddev, "Failed to allocate user pages.",
+						  -ENOMEM);
 				return -ENOMEM;
+			}
 		} else {
 			break;
 		}
 	}
 
 	ret = get_user_pages_fast(xfer_start_addr, nr_pages, 0, page_list);
-	if (ret < 0)
+	if (ret < 0) {
+		ret = -EFAULT;
+		trace_qaic_encode(qdev->qddev, "Failed to get user pages.", ret);
 		goto free_page_list;
+	}
 	if (ret != nr_pages) {
 		nr_pages = ret;
 		ret = -EFAULT;
@@ -444,6 +461,7 @@ static int find_and_map_user_pages(struct qaic_device *qdev,
 	sgt = kmalloc(sizeof(*sgt), GFP_KERNEL);
 	if (!sgt) {
 		ret = -ENOMEM;
+		trace_qaic_encode(qdev->qddev, "Failed to allocate sgt for user pages.", ret);
 		goto put_pages;
 	}
 
@@ -452,12 +470,15 @@ static int find_and_map_user_pages(struct qaic_device *qdev,
 					remaining, GFP_KERNEL);
 	if (ret) {
 		ret = -ENOMEM;
+		trace_qaic_encode(qdev->qddev, "Failed to allocate sgt table for user pages.", ret);
 		goto free_sgt;
 	}
 
 	ret = dma_map_sgtable(&qdev->pdev->dev, sgt, DMA_TO_DEVICE, 0);
-	if (ret)
+	if (ret) {
+		trace_qaic_encode(qdev->qddev, "dma_map_sgtable() failed for user pages.", ret);
 		goto free_table;
+	}
 
 	xfer->sgt = sgt;
 	xfer->page_list = page_list;
@@ -507,8 +528,10 @@ static int encode_addr_size_pairs(struct dma_xfer *xfer, struct wrapper_list *wr
 	}
 
 	trans_wrapper = add_wrapper(wrappers, QAIC_WRAPPER_MAX_SIZE);
-	if (!trans_wrapper)
+	if (!trans_wrapper) {
+		trace_qaic_encode(NULL, "Failed to allocate wrapper for ASP.", -ENOMEM);
 		return -ENOMEM;
+	}
 	*out_trans = (struct wire_trans_dma_xfer *)&trans_wrapper->trans;
 
 	asp = (*out_trans)->data;
@@ -527,8 +550,11 @@ static int encode_addr_size_pairs(struct dma_xfer *xfer, struct wrapper_list *wr
 				w->len = (void *)asp - (void *)&w->msg;
 				*size += w->len;
 				w = add_wrapper(wrappers, QAIC_WRAPPER_MAX_SIZE);
-				if (!w)
+				if (!w) {
+					trace_qaic_encode(NULL, "Failed to allocate wrapper for ASP.",
+							  -ENOMEM);
 					return -ENOMEM;
+				}
 				boundary = (void *)w + QAIC_WRAPPER_MAX_SIZE;
 				asp = (struct wire_addr_size_pair *)&w->msg;
 			}
@@ -571,6 +597,8 @@ static int encode_dma(struct qaic_device *qdev, void *trans, struct wrapper_list
 	u32 size;
 	int ret;
 
+	trace_qaic_encode_dma(qdev->qddev, in_trans);
+
 	wrapper = list_first_entry(&wrappers->list, struct wrapper_msg, list);
 	msg = &wrapper->msg;
 	msg_hdr_len = le32_to_cpu(msg->hdr.len);
@@ -581,8 +609,10 @@ static int encode_dma(struct qaic_device *qdev, void *trans, struct wrapper_list
 		return -ENOMEM;
 
 	xfer = kmalloc(sizeof(*xfer), GFP_KERNEL);
-	if (!xfer)
+	if (!xfer) {
+		trace_qaic_encode(qdev->qddev, "Failed to allocate DMA xfer buffer.", -ENOMEM);
 		return -ENOMEM;
+	}
 
 	ret = find_and_map_user_pages(qdev, in_trans, resources, xfer);
 	if (ret < 0)
@@ -591,8 +621,10 @@ static int encode_dma(struct qaic_device *qdev, void *trans, struct wrapper_list
 	need_cont_dma = (bool)ret;
 
 	ret = encode_addr_size_pairs(xfer, wrappers, resources, msg_hdr_len, &size, &out_trans);
-	if (ret < 0)
+	if (ret < 0) {
+		trace_qaic_encode(qdev->qddev, "Failed encode_addr_size_pairs().", ret);
 		goto cleanup_xfer;
+	}
 
 	need_cont_dma = need_cont_dma || (bool)ret;
 
@@ -642,37 +674,57 @@ static int encode_activate(struct qaic_device *qdev, void *trans, struct wrapper
 	u32 size;
 	int ret;
 
+	trace_qaic_encode_activate(qdev->qddev, in_trans);
+
 	wrapper = list_first_entry(&wrappers->list, struct wrapper_msg, list);
 	msg = &wrapper->msg;
 	msg_hdr_len = le32_to_cpu(msg->hdr.len);
 
-	if (size_add(msg_hdr_len, sizeof(*out_trans)) > QAIC_MANAGE_MAX_MSG_LENGTH)
+	if (size_add(msg_hdr_len, sizeof(*out_trans)) > QAIC_MANAGE_MAX_MSG_LENGTH) {
+		trace_qaic_encode_1(qdev->qddev, "No space left for activate. Buffer offset %llu.",
+				    msg_hdr_len);
 		return -ENOSPC;
+	}
 
-	if (!in_trans->queue_size)
+	if (!in_trans->queue_size) {
+		trace_qaic_encode(qdev->qddev, "Invalid queue size 0.", -EINVAL);
 		return -EINVAL;
+	}
 
-	if (in_trans->pad)
+	if (in_trans->pad) {
+		trace_qaic_encode(qdev->qddev, "Invalid padding.", -EINVAL);
 		return -EINVAL;
+	}
 
 	nelem = in_trans->queue_size;
 	size = (get_dbc_req_elem_size() + get_dbc_rsp_elem_size()) * nelem;
-	if (size / nelem != get_dbc_req_elem_size() + get_dbc_rsp_elem_size())
+	if (size / nelem != get_dbc_req_elem_size() + get_dbc_rsp_elem_size()) {
+		trace_qaic_encode_2(qdev->qddev, "Overflow queue_size=%llu, size of one element is %llu",
+				    in_trans->queue_size,
+				    get_dbc_req_elem_size() + get_dbc_rsp_elem_size());
 		return -EINVAL;
+	}
 
-	if (size + QAIC_DBC_Q_GAP + QAIC_DBC_Q_BUF_ALIGN < size)
+	if (size + QAIC_DBC_Q_GAP + QAIC_DBC_Q_BUF_ALIGN < size) {
+		trace_qaic_encode_1(qdev->qddev, "Request response queue size=%llu overflow after adding a gap and alignment",
+				    size);
 		return -EINVAL;
+	}
 
 	size = ALIGN((size + QAIC_DBC_Q_GAP), QAIC_DBC_Q_BUF_ALIGN);
 
 	buf = dma_alloc_coherent(&qdev->pdev->dev, size, &dma_addr, GFP_KERNEL);
-	if (!buf)
+	if (!buf) {
+		trace_qaic_encode(qdev->qddev, "Failed to allocate coherent DMA buffer for activate msg.",
+				  -ENOMEM);
 		return -ENOMEM;
+	}
 
 	trans_wrapper = add_wrapper(wrappers,
 				    offsetof(struct wrapper_msg, trans) + sizeof(*out_trans));
 	if (!trans_wrapper) {
 		ret = -ENOMEM;
+		trace_qaic_encode(qdev->qddev, "Failed to allocate wrapper for activate msg.", ret);
 		goto free_dma;
 	}
 	trans_wrapper->len = sizeof(*out_trans);
@@ -708,8 +760,13 @@ static int encode_deactivate(struct qaic_device *qdev, void *trans,
 {
 	struct qaic_manage_trans_deactivate *in_trans = trans;
 
-	if (in_trans->dbc_id >= qdev->num_dbc || in_trans->pad)
+	trace_qaic_encode_deactivate(qdev->qddev, in_trans);
+
+	if (in_trans->dbc_id >= qdev->num_dbc || in_trans->pad) {
+		trace_qaic_encode_2(qdev->qddev, "Invalid dbc_id=%llu or pad=%llu.",
+				    in_trans->dbc_id, in_trans->pad);
 		return -EINVAL;
+	}
 
 	*user_len += in_trans->hdr.len;
 
@@ -726,16 +783,23 @@ static int encode_status(struct qaic_device *qdev, void *trans, struct wrapper_l
 	struct wire_msg *msg;
 	u32 msg_hdr_len;
 
+	trace_qaic_encode_status(qdev->qddev, in_trans);
+
 	wrapper = list_first_entry(&wrappers->list, struct wrapper_msg, list);
 	msg = &wrapper->msg;
 	msg_hdr_len = le32_to_cpu(msg->hdr.len);
 
-	if (size_add(msg_hdr_len, in_trans->hdr.len) > QAIC_MANAGE_MAX_MSG_LENGTH)
+	if (size_add(msg_hdr_len, in_trans->hdr.len) > QAIC_MANAGE_MAX_MSG_LENGTH) {
+		trace_qaic_encode_1(qdev->qddev, "No space left for status. Buffer offset %llu.",
+				    msg_hdr_len);
 		return -ENOSPC;
+	}
 
 	trans_wrapper = add_wrapper(wrappers, sizeof(*trans_wrapper));
-	if (!trans_wrapper)
+	if (!trans_wrapper) {
+		trace_qaic_encode(qdev->qddev, "Failed to allocate wrapper.", -ENOMEM);
 		return -ENOMEM;
+	}
 
 	trans_wrapper->len = sizeof(*out_trans);
 	out_trans = (struct wire_trans_status_to_dev *)&trans_wrapper->trans;
@@ -777,17 +841,26 @@ static int encode_message(struct qaic_device *qdev, struct manage_msg *user_msg,
 		goto out;
 	}
 
+	trace_qaic_manage_dbg(qdev->qddev, "Number of transaction to encode is %llu.",
+			      user_msg->count);
+
 	for (i = 0; i < user_msg->count; ++i) {
 		if (user_len > user_msg->len - sizeof(*trans_hdr)) {
+			trace_qaic_encode_2(qdev->qddev, "Invalid! current transaction exceeds user buffer. User msg buffer offset %llu User msg buffer len=%llu.",
+					    user_len, user_msg->len);
 			ret = -EINVAL;
 			break;
 		}
 		trans_hdr = (struct qaic_manage_trans_hdr *)(user_msg->data + user_len);
 		if (trans_hdr->len < sizeof(trans_hdr) ||
 		    size_add(user_len, trans_hdr->len) > user_msg->len) {
+			trace_qaic_encode_3(qdev->qddev, "Invalid! current transaction exceeds user buffer. User msg buffer offset %llu User msg buffer len=%llu Current trans len=%llu.",
+					    user_len, user_msg->len, trans_hdr->len);
 			ret = -EINVAL;
 			break;
 		}
+
+		trace_qaic_manage_dbg(qdev->qddev, "Encoding transaction %llu.", trans_hdr->type);
 
 		switch (trans_hdr->type) {
 		case QAIC_TRANS_PASSTHROUGH_FROM_USR:
@@ -806,6 +879,8 @@ static int encode_message(struct qaic_device *qdev, struct manage_msg *user_msg,
 			ret = encode_status(qdev, trans_hdr, wrappers, &user_len);
 			break;
 		default:
+			trace_qaic_encode_1(qdev->qddev, "Invalid transaction type=%llu.",
+					    trans_hdr->type);
 			ret = -EINVAL;
 			break;
 		}
@@ -814,8 +889,11 @@ static int encode_message(struct qaic_device *qdev, struct manage_msg *user_msg,
 			break;
 	}
 
-	if (user_len != user_msg->len)
+	if (user_len != user_msg->len) {
+		trace_qaic_encode_2(qdev->qddev, "Invalid! entire user msg not processed. User msg buffer offset %llu User msg buffer len=%llu.",
+				    user_len, user_msg->len);
 		ret = -EINVAL;
+	}
 out:
 	if (ret) {
 		free_dma_xfers(qdev, resources);
@@ -836,17 +914,24 @@ static int decode_passthrough(struct qaic_device *qdev, void *trans, struct mana
 	out_trans = (void *)user_msg->data + user_msg->len;
 
 	len = le32_to_cpu(in_trans->hdr.len);
-	if (len % 8 != 0)
+	if (len % 8 != 0) {
+		trace_qaic_decode_1(qdev->qddev, "Invalid passthrough trans len=%llu.", len);
 		return -EINVAL;
+	}
 
-	if (user_msg->len + len > QAIC_MANAGE_MAX_MSG_LENGTH)
+	if (user_msg->len + len > QAIC_MANAGE_MAX_MSG_LENGTH) {
+		trace_qaic_decode_2(qdev->qddev, "No space left for passthrough. Buffer offset %llu trans len=%llu.",
+				    user_msg->len, len);
 		return -ENOSPC;
+	}
 
 	memcpy(out_trans->data, in_trans->data, len - sizeof(in_trans->hdr));
 	user_msg->len += len;
 	*msg_len += len;
 	out_trans->hdr.type = le32_to_cpu(in_trans->hdr.type);
 	out_trans->hdr.len = len;
+
+	trace_qaic_decode_passthrough(qdev->qddev, out_trans);
 
 	return 0;
 }
@@ -861,8 +946,11 @@ static int decode_activate(struct qaic_device *qdev, void *trans, struct manage_
 	out_trans = (void *)user_msg->data + user_msg->len;
 
 	len = le32_to_cpu(in_trans->hdr.len);
-	if (user_msg->len + len > QAIC_MANAGE_MAX_MSG_LENGTH)
+	if (user_msg->len + len > QAIC_MANAGE_MAX_MSG_LENGTH) {
+		trace_qaic_decode_2(qdev->qddev, "No space left for activate. Buffer offset %llu trans len=%llu.",
+				    user_msg->len, len);
 		return -ENOSPC;
+	}
 
 	user_msg->len += len;
 	*msg_len += len;
@@ -872,27 +960,35 @@ static int decode_activate(struct qaic_device *qdev, void *trans, struct manage_
 	out_trans->dbc_id = le32_to_cpu(in_trans->dbc_id);
 	out_trans->options = le64_to_cpu(in_trans->options);
 
-	if (!resources->buf)
+	if (!resources->buf) {
 		/* how did we get an activate response without a request? */
+		trace_qaic_decode(qdev->qddev, "Rec`d unexpected activate response.", -EINVAL);
 		return -EINVAL;
+	}
 
-	if (out_trans->dbc_id >= qdev->num_dbc)
+	if (out_trans->dbc_id >= qdev->num_dbc) {
 		/*
 		 * The device assigned an invalid resource, which should never
 		 * happen. Return an error so the user can try to recover.
 		 */
+		trace_qaic_decode_1(qdev->qddev, "Invalid dbc_id=%llu in activate", out_trans->dbc_id);
 		return -ENODEV;
+	}
 
-	if (out_trans->status)
+	if (out_trans->status) {
 		/*
 		 * Allocating resources failed on device side. This is not an
 		 * expected behaviour, user is expected to handle this situation.
 		 */
+		trace_qaic_decode_1(qdev->qddev, "Activate failed status=%llu.", out_trans->status);
 		return -ECANCELED;
+	}
 
 	resources->status = out_trans->status;
 	resources->dbc_id = out_trans->dbc_id;
 	save_dbc_buf(qdev, resources, usr);
+
+	trace_qaic_decode_activate(qdev->qddev, out_trans);
 
 	return 0;
 }
@@ -904,12 +1000,14 @@ static int decode_deactivate(struct qaic_device *qdev, void *trans, u32 *msg_len
 	u32 dbc_id = le32_to_cpu(in_trans->dbc_id);
 	u32 status = le32_to_cpu(in_trans->status);
 
-	if (dbc_id >= qdev->num_dbc)
+	if (dbc_id >= qdev->num_dbc) {
 		/*
 		 * The device assigned an invalid resource, which should never
 		 * happen. Inject an error so the user can try to recover.
 		 */
+		trace_qaic_decode_1(qdev->qddev, "Invalid dbc_id=%llu in deactivate.", dbc_id);
 		return -ENODEV;
+	}
 
 	if (status) {
 		/*
@@ -918,12 +1016,15 @@ static int decode_deactivate(struct qaic_device *qdev, void *trans, u32 *msg_len
 		 * dbc. User is expected to retry deactivation.
 		 */
 		enable_dbc(qdev, dbc_id, usr);
+		trace_qaic_decode_1(qdev->qddev, "Deactivate failed status=%llu.", status);
 		return -ECANCELED;
 	}
 
 	release_dbc(qdev, dbc_id);
 	set_dbc_state(qdev, dbc_id, DBC_STATE_IDLE);
 	*msg_len += sizeof(*in_trans);
+
+	trace_qaic_decode_deactivate(qdev->qddev, dbc_id, status);
 
 	return 0;
 }
@@ -938,8 +1039,11 @@ static int decode_status(struct qaic_device *qdev, void *trans, struct manage_ms
 	out_trans = (void *)user_msg->data + user_msg->len;
 
 	len = le32_to_cpu(in_trans->hdr.len);
-	if (user_msg->len + len > QAIC_MANAGE_MAX_MSG_LENGTH)
+	if (user_msg->len + len > QAIC_MANAGE_MAX_MSG_LENGTH) {
+		trace_qaic_decode_2(qdev->qddev, "No space left for status. Buffer offset %llu trans len=%llu.",
+				    user_msg->len, len);
 		return -ENOSPC;
+	}
 
 	out_trans->hdr.type = QAIC_TRANS_STATUS_FROM_DEV;
 	out_trans->hdr.len = len;
@@ -950,10 +1054,18 @@ static int decode_status(struct qaic_device *qdev, void *trans, struct manage_ms
 	*user_len += le32_to_cpu(in_trans->hdr.len);
 	user_msg->len += len;
 
-	if (out_trans->status)
+	if (out_trans->status) {
+		trace_qaic_decode_1(qdev->qddev, "Deactivate failed status=%llu.",
+				    out_trans->status);
 		return -ECANCELED;
-	if (out_trans->status_flags & BIT(0) && !valid_crc(msg))
+	}
+	if (out_trans->status_flags & BIT(0) && !valid_crc(msg)) {
+		trace_qaic_decode_1(qdev->qddev, "Corrupted CRC received crc32=%llu.",
+				    le32_to_cpu(msg->hdr.crc32));
 		return -EPIPE;
+	}
+
+	trace_qaic_decode_status(qdev->qddev, out_trans);
 
 	return 0;
 }
@@ -969,11 +1081,16 @@ static int decode_message(struct qaic_device *qdev, struct manage_msg *user_msg,
 	int i;
 
 	if (msg_hdr_len < sizeof(*trans_hdr) ||
-	    msg_hdr_len > QAIC_MANAGE_MAX_MSG_LENGTH)
+	    msg_hdr_len > QAIC_MANAGE_MAX_MSG_LENGTH) {
+		trace_qaic_decode_1(qdev->qddev, "Invalid message length %llu.", msg_hdr_len);
 		return -EINVAL;
+	}
 
 	user_msg->len = 0;
 	user_msg->count = le32_to_cpu(msg->hdr.count);
+
+	trace_qaic_manage_dbg(qdev->qddev, "Number of transaction to decode is %llu.",
+			      user_msg->count);
 
 	for (i = 0; i < user_msg->count; ++i) {
 		u32 hdr_len;
@@ -986,6 +1103,9 @@ static int decode_message(struct qaic_device *qdev, struct manage_msg *user_msg,
 		if (hdr_len < sizeof(*trans_hdr) ||
 		    size_add(msg_len, hdr_len) > msg_hdr_len)
 			return -EINVAL;
+
+		trace_qaic_manage_dbg(qdev->qddev, "Decoding transaction %llu.",
+				      le32_to_cpu(trans_hdr->type));
 
 		switch (le32_to_cpu(trans_hdr->type)) {
 		case QAIC_TRANS_PASSTHROUGH_FROM_DEV:
@@ -1001,6 +1121,8 @@ static int decode_message(struct qaic_device *qdev, struct manage_msg *user_msg,
 			ret = decode_status(qdev, trans_hdr, user_msg, &msg_len, msg);
 			break;
 		default:
+			trace_qaic_decode_1(qdev->qddev, "Invalid transaction type=%llu.",
+					    le32_to_cpu(trans_hdr->type));
 			return -EINVAL;
 		}
 
@@ -1008,8 +1130,11 @@ static int decode_message(struct qaic_device *qdev, struct manage_msg *user_msg,
 			return ret;
 	}
 
-	if (msg_len != (msg_hdr_len - sizeof(msg->hdr)))
+	if (msg_len != (msg_hdr_len - sizeof(msg->hdr))) {
+		trace_qaic_decode_2(qdev->qddev, "Invalid! entire resp msg not processed. resp msg buffer offset %llu resp msg buffer len=%llu.",
+				    msg_len, (msg_hdr_len - sizeof(msg->hdr)));
 		return -EINVAL;
+	}
 
 	return 0;
 }
@@ -1027,6 +1152,7 @@ static void *msg_xfer(struct qaic_device *qdev, struct wrapper_list *wrappers, u
 	/* Allow QAIC_BOOT state since we need to check control protocol version */
 	if (qdev->dev_state == QAIC_OFFLINE) {
 		mutex_unlock(&qdev->cntl_mutex);
+		trace_qaic_manage(NULL, "Device in reset.", -ENODEV);
 		return ERR_PTR(-ENODEV);
 	}
 
@@ -1046,6 +1172,7 @@ static void *msg_xfer(struct qaic_device *qdev, struct wrapper_list *wrappers, u
 
 	if (ret) {
 		mutex_unlock(&qdev->cntl_mutex);
+		trace_qaic_manage(qdev->qddev, "MHI buffer not free.", ret);
 		return ERR_PTR(ret);
 	}
 
@@ -1060,6 +1187,7 @@ static void *msg_xfer(struct qaic_device *qdev, struct wrapper_list *wrappers, u
 		out_buf = kmalloc(QAIC_MANAGE_MAX_MSG_LENGTH, GFP_KERNEL);
 		if (!out_buf) {
 			mutex_unlock(&qdev->cntl_mutex);
+			trace_qaic_manage(qdev->qddev, "Resp buffer allocation failed.", -ENOMEM);
 			return ERR_PTR(-ENOMEM);
 		}
 
@@ -1067,6 +1195,8 @@ static void *msg_xfer(struct qaic_device *qdev, struct wrapper_list *wrappers, u
 				    QAIC_MANAGE_MAX_MSG_LENGTH, MHI_EOT);
 		if (ret) {
 			mutex_unlock(&qdev->cntl_mutex);
+			trace_qaic_mhi_queue(qdev->qddev, "MHI failed to queue buffer in dir from device.",
+					     ret);
 			return ERR_PTR(ret);
 		}
 	} else {
@@ -1088,6 +1218,8 @@ static void *msg_xfer(struct qaic_device *qdev, struct wrapper_list *wrappers, u
 			qdev->cntl_lost_buf = true;
 			kref_put(&w->ref_count, free_wrapper);
 			mutex_unlock(&qdev->cntl_mutex);
+			trace_qaic_mhi_queue(qdev->qddev, "MHI failed to queue buffer in dir to device.",
+					   ret);
 			return ERR_PTR(ret);
 		}
 	}
@@ -1115,9 +1247,11 @@ static void *msg_xfer(struct qaic_device *qdev, struct wrapper_list *wrappers, u
 
 	if (ret < 0) {
 		kfree(elem.buf);
+		trace_qaic_manage(qdev->qddev, "No response element from device.", ret);
 		return ERR_PTR(ret);
 	} else if (!qdev->valid_crc(elem.buf)) {
 		kfree(elem.buf);
+		trace_qaic_manage(qdev->qddev, "Bad CRC on rev'd message.", -EPIPE);
 		return ERR_PTR(-EPIPE);
 	}
 
@@ -1185,12 +1319,15 @@ static int qaic_manage_msg_xfer(struct qaic_device *qdev, struct qaic_user *usr,
 	int ret;
 
 	wrappers = alloc_wrapper_list();
-	if (!wrappers)
+	if (!wrappers) {
+		trace_qaic_manage_usr(qdev->qddev, "alloc_wrapper_list() failed.", -ENOMEM, usr);
 		return -ENOMEM;
+	}
 
 	wrapper = add_wrapper(wrappers, sizeof(*wrapper));
 	if (!wrapper) {
 		kfree(wrappers);
+		trace_qaic_manage_usr(qdev->qddev, "add_wrapper() failed.", -ENOMEM, usr);
 		return -ENOMEM;
 	}
 
@@ -1204,8 +1341,10 @@ static int qaic_manage_msg_xfer(struct qaic_device *qdev, struct qaic_user *usr,
 		goto encode_failed;
 
 	ret = mutex_lock_interruptible(&qdev->cntl_mutex);
-	if (ret)
+	if (ret) {
+		trace_qaic_manage_usr(qdev->qddev, "mutex_lock interrupted.", ret, usr);
 		goto lock_failed;
+	}
 
 	msg->hdr.magic_number = MANAGE_MAGIC_NUMBER;
 	msg->hdr.sequence_number = cpu_to_le32(qdev->next_seq_num++);
@@ -1223,8 +1362,11 @@ static int qaic_manage_msg_xfer(struct qaic_device *qdev, struct qaic_user *usr,
 
 	/* msg_xfer releases the mutex */
 	*rsp = msg_xfer(qdev, wrappers, qdev->next_seq_num - 1, false);
-	if (IS_ERR(*rsp))
+	if (IS_ERR(*rsp)) {
 		ret = PTR_ERR(*rsp);
+		trace_qaic_manage_usr(qdev->qddev, "Failed to transfer message to device.", ret,
+				      usr);
+	}
 
 lock_failed:
 	free_dma_xfers(qdev, resources);
@@ -1252,8 +1394,11 @@ static int qaic_manage(struct qaic_device *qdev, struct qaic_user *usr, struct m
 	INIT_LIST_HEAD(&resources.dma_xfers);
 
 	if (user_msg->len > QAIC_MANAGE_MAX_MSG_LENGTH ||
-	    user_msg->count > QAIC_MANAGE_MAX_MSG_LENGTH / sizeof(struct qaic_manage_trans_hdr))
+	    user_msg->count > QAIC_MANAGE_MAX_MSG_LENGTH / sizeof(struct qaic_manage_trans_hdr)){
+		trace_qaic_manage_3(qdev->qddev, "User message len is %llu(max: %llu) and count %llu.",
+				    user_msg->len, QAIC_MANAGE_MAX_MSG_LENGTH, user_msg->count);
 		return -EINVAL;
+	}
 
 dma_xfer_continue:
 	ret = qaic_manage_msg_xfer(qdev, usr, user_msg, &resources, &rsp);
@@ -1272,6 +1417,10 @@ dma_xfer_continue:
 			goto dma_xfer_continue;
 		}
 
+		trace_qaic_manage_4(qdev->qddev, "Chunk id rec`d is %llu chunk id %llu xferred size rec`d %llu xferred size %llu.",
+				    le32_to_cpu(dma_cont->dma_chunk_id), resources.dma_chunk_id,
+				    le64_to_cpu(dma_cont->xferred_size),
+				    resources.xferred_dma_size);
 		ret = -EINVAL;
 		goto dma_cont_failed;
 	}
@@ -1295,14 +1444,18 @@ int qaic_manage_ioctl(struct drm_device *dev, void *data, struct drm_file *file_
 	int usr_rcu_id;
 	int ret;
 
-	if (user_msg->len > QAIC_MANAGE_MAX_MSG_LENGTH)
+	if (user_msg->len > QAIC_MANAGE_MAX_MSG_LENGTH) {
+		trace_qaic_manage_2(NULL, "Invalid user message length %llu > %llu",
+				    user_msg->len, QAIC_MANAGE_MAX_MSG_LENGTH);
 		return -EINVAL;
+	}
 
 	usr = file_priv->driver_priv;
 
 	usr_rcu_id = srcu_read_lock(&usr->qddev_lock);
 	if (!usr->qddev) {
 		srcu_read_unlock(&usr->qddev_lock, usr_rcu_id);
+		trace_qaic_manage(NULL, "Device no longer exists.", -ENODEV);
 		return -ENODEV;
 	}
 
@@ -1312,12 +1465,14 @@ int qaic_manage_ioctl(struct drm_device *dev, void *data, struct drm_file *file_
 	if (qdev->dev_state != QAIC_ONLINE) {
 		srcu_read_unlock(&qdev->dev_lock, qdev_rcu_id);
 		srcu_read_unlock(&usr->qddev_lock, usr_rcu_id);
+		trace_qaic_manage(NULL, "Device under reset.", -ENODEV);
 		return -ENODEV;
 	}
 
 	msg = kzalloc(QAIC_MANAGE_MAX_MSG_LENGTH + sizeof(*msg), GFP_KERNEL);
 	if (!msg) {
 		ret = -ENOMEM;
+		trace_qaic_manage(usr->qddev, "Failed to allocate message buffer.", ret);
 		goto out;
 	}
 
@@ -1328,6 +1483,8 @@ int qaic_manage_ioctl(struct drm_device *dev, void *data, struct drm_file *file_
 
 	if (copy_from_user(msg->data, user_data, user_msg->len)) {
 		ret = -EFAULT;
+		trace_qaic_manage_2(usr->qddev, "Failed to copy from user. addr %llu len %llu",
+				    user_msg->data, user_msg->len);
 		goto free_msg;
 	}
 
@@ -1342,6 +1499,8 @@ int qaic_manage_ioctl(struct drm_device *dev, void *data, struct drm_file *file_
 	if (ret == -ECANCELED || !ret) {
 		if (copy_to_user(user_data, msg->data, msg->len)) {
 			ret = -EFAULT;
+			trace_qaic_manage_2(usr->qddev, "Failed to copy to user. addr %llu len %llu",
+					    user_msg->data, msg->len);
 		} else {
 			user_msg->len = msg->len;
 			user_msg->count = msg->count;
@@ -1366,6 +1525,8 @@ int get_cntl_version(struct qaic_device *qdev, struct qaic_user *usr, u16 *major
 	user_msg = kmalloc(sizeof(*user_msg) + sizeof(*status_result), GFP_KERNEL);
 	if (!user_msg) {
 		ret = -ENOMEM;
+		trace_qaic_manage(NULL, "Failed to allocate memory for message to get control version.",
+				  ret);
 		goto out;
 	}
 	user_msg->len = sizeof(*status_query);
@@ -1417,9 +1578,11 @@ static void resp_worker(struct work_struct *work)
 	}
 	mutex_unlock(&qdev->cntl_mutex);
 
-	if (!found)
+	if (!found) {
 		/* request must have timed out, drop packet */
+		trace_qaic_manage(NULL, "Packet dropped.", -ETIME);
 		kfree(msg);
+	}
 
 	kfree(resp);
 }
@@ -1450,14 +1613,19 @@ void qaic_mhi_dl_xfer_cb(struct mhi_device *mhi_dev, struct mhi_result *mhi_resu
 	struct qaic_device *qdev = dev_get_drvdata(&mhi_dev->dev);
 	struct wire_msg *msg = mhi_result->buf_addr;
 	struct resp_work *resp;
+	u32 magic_nr;
 
-	if (mhi_result->transaction_status || msg->hdr.magic_number != MANAGE_MAGIC_NUMBER) {
+	magic_nr = le32_to_cpu(msg->hdr.magic_number);
+	if (mhi_result->transaction_status || magic_nr != MANAGE_MAGIC_NUMBER) {
+		trace_qaic_manage_2(qdev->qddev, "MHI DL failed. trans status %llu magic number %llu.",
+				    mhi_result->transaction_status, magic_nr);
 		kfree(msg);
 		return;
 	}
 
 	resp = kmalloc(sizeof(*resp), GFP_ATOMIC);
 	if (!resp) {
+		trace_qaic_manage(qdev->qddev, "MHI DL failed to allocate response.", -ENOMEM);
 		kfree(msg);
 		return;
 	}
@@ -1506,12 +1674,17 @@ void qaic_release_usr(struct qaic_device *qdev, struct qaic_user *usr)
 	struct wire_msg *rsp;
 
 	wrappers = alloc_wrapper_list();
-	if (!wrappers)
+	if (!wrappers) {
+		trace_qaic_manage(usr->qddev, "Release usr, failed to allocate wrapper list.",
+				  -ENOMEM);
 		return;
+	}
 
 	wrapper = add_wrapper(wrappers, sizeof(*wrapper) + sizeof(*msg) + sizeof(*trans));
-	if (!wrapper)
+	if (!wrapper) {
+		trace_qaic_manage(usr->qddev, "Release usr, failed to allocate wrapper.", -ENOMEM);
 		return;
+	}
 
 	msg = &wrapper->msg;
 

@@ -28,6 +28,7 @@
 #include <uapi/drm/qaic_accel.h>
 
 #include "qaic.h"
+#include "qaic_trace.h"
 
 #define SEM_VAL_MASK	GENMASK_ULL(11, 0)
 #define SEM_INDEX_MASK	GENMASK_ULL(4, 0)
@@ -61,85 +62,6 @@ static unsigned int datapath_poll_interval_us = 100; /* 100 usec default */
 module_param(datapath_poll_interval_us, uint, 0600);
 MODULE_PARM_DESC(datapath_poll_interval_us,
 		 "Amount of time to sleep between activity when datapath polling is enabled");
-
-struct dbc_req {
-	/*
-	 * A request ID is assigned to each memory handle going in DMA queue.
-	 * As a single memory handle can enqueue multiple elements in DMA queue
-	 * all of them will have the same request ID.
-	 */
-	__le16	req_id;
-	/* Future use */
-	__u8	seq_id;
-	/*
-	 * Special encoded variable
-	 * 7	0 - Do not force to generate MSI after DMA is completed
-	 *	1 - Force to generate MSI after DMA is completed
-	 * 6:5	Reserved
-	 * 4	1 - Generate completion element in the response queue
-	 *	0 - No Completion Code
-	 * 3	0 - DMA request is a Link list transfer
-	 *	1 - DMA request is a Bulk transfer
-	 * 2	Reserved
-	 * 1:0	00 - No DMA transfer involved
-	 *	01 - DMA transfer is part of inbound transfer
-	 *	10 - DMA transfer has outbound transfer
-	 *	11 - NA
-	 */
-	__u8	cmd;
-	__le32	resv;
-	/* Source address for the transfer */
-	__le64	src_addr;
-	/* Destination address for the transfer */
-	__le64	dest_addr;
-	/* Length of transfer request */
-	__le32	len;
-	__le32	resv2;
-	/* Doorbell address */
-	__le64	db_addr;
-	/*
-	 * Special encoded variable
-	 * 7	1 - Doorbell(db) write
-	 *	0 - No doorbell write
-	 * 6:2	Reserved
-	 * 1:0	00 - 32 bit access, db address must be aligned to 32bit-boundary
-	 *	01 - 16 bit access, db address must be aligned to 16bit-boundary
-	 *	10 - 8 bit access, db address must be aligned to 8bit-boundary
-	 *	11 - Reserved
-	 */
-	__u8	db_len;
-	__u8	resv3;
-	__le16	resv4;
-	/* 32 bit data written to doorbell address */
-	__le32	db_data;
-	/*
-	 * Special encoded variable
-	 * All the fields of sem_cmdX are passed from user and all are ORed
-	 * together to form sem_cmd.
-	 * 0:11		Semaphore value
-	 * 15:12	Reserved
-	 * 20:16	Semaphore index
-	 * 21		Reserved
-	 * 22		Semaphore Sync
-	 * 23		Reserved
-	 * 26:24	Semaphore command
-	 * 28:27	Reserved
-	 * 29		Semaphore DMA out bound sync fence
-	 * 30		Semaphore DMA in bound sync fence
-	 * 31		Enable semaphore command
-	 */
-	__le32	sem_cmd0;
-	__le32	sem_cmd1;
-	__le32	sem_cmd2;
-	__le32	sem_cmd3;
-} __packed;
-
-struct dbc_rsp {
-	/* Request ID of the memory handle whose DMA transaction is completed */
-	__le16	req_id;
-	/* Status of the DMA transaction. 0 : Success otherwise failure */
-	__le16	status;
-} __packed;
 
 static inline bool bo_queued(struct qaic_bo *bo)
 {
@@ -206,18 +128,23 @@ static int clone_range_of_sgt_for_slice(struct qaic_device *qdev, struct sg_tabl
 
 	if (!sgf || !sgl) {
 		ret = -EINVAL;
+		trace_qaic_attach_slice_bo_2(qdev->qddev, "Invalid size=%llu or offset=%llu of this slice",
+					     size, offset);
 		goto out;
 	}
 
 	sgt = kzalloc(sizeof(*sgt), GFP_KERNEL);
 	if (!sgt) {
 		ret = -ENOMEM;
+		trace_qaic_attach_slice_bo(qdev->qddev, "Failed to allocate slice sgt.", ret);
 		goto out;
 	}
 
 	ret = sg_alloc_table(sgt, nents, GFP_KERNEL);
-	if (ret)
+	if (ret) {
+		trace_qaic_attach_slice_bo(qdev->qddev, "Failed to allocate slice sgt table.", ret);
 		goto free_sgt;
+	}
 
 	/* copy relevant sg node and fix page and length */
 	sgn = sgf;
@@ -264,12 +191,19 @@ static int encode_reqs(struct qaic_device *qdev, struct bo_slice *slice,
 	if (!slice->no_xfer)
 		cmd |= (slice->dir == DMA_TO_DEVICE ? INBOUND_XFER : OUTBOUND_XFER);
 
-	if (req->db_len && !IS_ALIGNED(req->db_addr, req->db_len / 8))
+	if (req->db_len && !IS_ALIGNED(req->db_addr, req->db_len / 8)) {
+		trace_qaic_attach_slice_bo_2(qdev->qddev, "Invalid db_len=%llu or db_addr=0x%llx.",
+					     req->db_len, req->db_addr);
 		return -EINVAL;
+	}
 
 	presync_sem = req->sem0.presync + req->sem1.presync + req->sem2.presync + req->sem3.presync;
-	if (presync_sem > 1)
+	if (presync_sem > 1) {
+		trace_qaic_attach_slice_bo_4(qdev->qddev, "Invalid presync_sem sem0 %llu sem1 %llu sem2 %llu sem3 %llu.",
+					     req->sem0.presync, req->sem1.presync,
+					     req->sem2.presync, req->sem3.presync);
 		return -EINVAL;
+	}
 
 	presync_sem = req->sem0.presync << 0 | req->sem1.presync << 1 |
 		      req->sem2.presync << 2 | req->sem3.presync << 3;
@@ -288,6 +222,7 @@ static int encode_reqs(struct qaic_device *qdev, struct bo_slice *slice,
 		db_len = 0; /* doorbell is not active for this command */
 		break;
 	default:
+		trace_qaic_attach_slice_bo_1(qdev->qddev, "Invalid db_len=%llu.", req->db_len);
 		return -EINVAL; /* should never hit this */
 	}
 
@@ -389,7 +324,8 @@ static int qaic_map_one_slice(struct qaic_device *qdev, struct qaic_bo *bo,
 {
 	struct sg_table *sgt = NULL;
 	struct bo_slice *slice;
-	int ret;
+	struct scatterlist *sg;
+	int ret, i;
 
 	ret = clone_range_of_sgt_for_slice(qdev, &sgt, bo->sgt, slice_ent->size, slice_ent->offset);
 	if (ret)
@@ -398,12 +334,14 @@ static int qaic_map_one_slice(struct qaic_device *qdev, struct qaic_bo *bo,
 	slice = kmalloc(sizeof(*slice), GFP_KERNEL);
 	if (!slice) {
 		ret = -ENOMEM;
+		trace_qaic_attach_slice_bo(qdev->qddev, "Failed to allocate slice structure.", ret);
 		goto free_sgt;
 	}
 
 	slice->reqs = kcalloc(sgt->nents, sizeof(*slice->reqs), GFP_KERNEL);
 	if (!slice->reqs) {
 		ret = -ENOMEM;
+		trace_qaic_attach_slice_bo(qdev->qddev, "Failed to allocate slice requests.", ret);
 		goto free_slice;
 	}
 
@@ -418,6 +356,9 @@ static int qaic_map_one_slice(struct qaic_device *qdev, struct qaic_bo *bo,
 	ret = encode_reqs(qdev, slice, slice_ent);
 	if (ret)
 		goto free_req;
+
+	for_each_sgtable_sg(slice->sgt, sg, i)
+		trace_qaic_dbc_req(bo, &slice->reqs[i]);
 
 	bo->total_slice_nents += sgt->nents;
 	kref_init(&slice->ref_count);
@@ -468,6 +409,7 @@ static int create_sgt(struct qaic_device *qdev, struct sg_table **sgt_out, u64 s
 	pages = kvmalloc_array(nr_pages, sizeof(*pages) + sizeof(*pages_order), GFP_KERNEL);
 	if (!pages) {
 		ret = -ENOMEM;
+		trace_qaic_create_bo(qdev->qddev, "Failed to allocate temp pages holder.", ret);
 		goto out;
 	}
 	pages_order = (void *)pages + sizeof(*pages) * nr_pages;
@@ -489,6 +431,7 @@ static int create_sgt(struct qaic_device *qdev, struct sg_table **sgt_out, u64 s
 				break;
 			if (!order--) {
 				ret = -ENOMEM;
+				trace_qaic_create_bo(qdev->qddev, "Failed to allocate BO.", ret);
 				goto free_partial_alloc;
 			}
 		}
@@ -506,11 +449,13 @@ static int create_sgt(struct qaic_device *qdev, struct sg_table **sgt_out, u64 s
 	sgt = kmalloc(sizeof(*sgt), GFP_KERNEL);
 	if (!sgt) {
 		ret = -ENOMEM;
+		trace_qaic_create_bo(qdev->qddev, "Failed to allocate sgt.", ret);
 		goto free_partial_alloc;
 	}
 
 	if (sg_alloc_table(sgt, i, GFP_KERNEL)) {
 		ret = -ENOMEM;
+		trace_qaic_create_bo(qdev->qddev, "Failed to allocate sgt table.", ret);
 		goto free_sgt;
 	}
 
@@ -546,8 +491,10 @@ static bool invalid_sem(struct qaic_sem *sem)
 	if (sem->val & ~SEM_VAL_MASK || sem->index & ~SEM_INDEX_MASK ||
 	    !(sem->presync == 0 || sem->presync == 1) || sem->pad ||
 	    sem->flags & ~(QAIC_SEM_INSYNCFENCE | QAIC_SEM_OUTSYNCFENCE) ||
-	    sem->cmd > QAIC_SEM_WAIT_GT_0)
+	    sem->cmd > QAIC_SEM_WAIT_GT_0) {
+		trace_qaic_attach_slice_bo(NULL, "Invalid sem.", -EINVAL);
 		return true;
+	}
 	return false;
 }
 
@@ -560,11 +507,17 @@ static int qaic_validate_req(struct qaic_device *qdev, struct qaic_attach_slice_
 		if (!(slice_ent[i].db_len == 32 || slice_ent[i].db_len == 16 ||
 		      slice_ent[i].db_len == 8 || slice_ent[i].db_len == 0) ||
 		      invalid_sem(&slice_ent[i].sem0) || invalid_sem(&slice_ent[i].sem1) ||
-		      invalid_sem(&slice_ent[i].sem2) || invalid_sem(&slice_ent[i].sem3))
+		      invalid_sem(&slice_ent[i].sem2) || invalid_sem(&slice_ent[i].sem3)) {
+			trace_qaic_attach_slice_bo(qdev->qddev, "Invalid slice config.", -EINVAL);
 			return -EINVAL;
+		      }
 
-		if (slice_ent[i].offset + slice_ent[i].size > total_size)
+		if (slice_ent[i].offset + slice_ent[i].size > total_size) {
+			trace_qaic_attach_slice_bo_3(qdev->qddev, "Invalid slice size or offset. BO size=%llu slice size=%llu and offset=%llu.",
+						     total_size, slice_ent[i].size,
+						     slice_ent[i].offset);
 			return -EINVAL;
+		}
 	}
 
 	return 0;
@@ -604,8 +557,11 @@ static int qaic_gem_object_mmap(struct drm_gem_object *obj, struct vm_area_struc
 	struct scatterlist *sg;
 	int ret = 0;
 
-	if (obj->import_attach)
+	if (obj->import_attach) {
+		trace_qaic_mmap(to_qaic_drm_device(obj->dev), "mmap() called for BO derived out of DMABUF.",
+				-EINVAL);
 		return -EINVAL;
+	}
 
 	for (sg = bo->sgt->sgl; sg; sg = sg_next(sg)) {
 		if (sg_page(sg)) {
@@ -683,17 +639,22 @@ int qaic_create_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *fi
 	size_t size;
 	int ret;
 
-	if (args->pad)
+	if (args->pad) {
+		trace_qaic_create_bo(NULL, "Invalid non-zero padding.", -EINVAL);
 		return -EINVAL;
+	}
 
 	size = PAGE_ALIGN(args->size);
-	if (size == 0)
+	if (size == 0) {
+		trace_qaic_create_bo(NULL, "Invalid BO size 0.", -EINVAL);
 		return -EINVAL;
+	}
 
 	usr = file_priv->driver_priv;
 	usr_rcu_id = srcu_read_lock(&usr->qddev_lock);
 	if (!usr->qddev) {
 		ret = -ENODEV;
+		trace_qaic_create_bo(NULL, "Device not available.", ret);
 		goto unlock_usr_srcu;
 	}
 
@@ -701,12 +662,14 @@ int qaic_create_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *fi
 	qdev_rcu_id = srcu_read_lock(&qdev->dev_lock);
 	if (qdev->dev_state != QAIC_ONLINE) {
 		ret = -ENODEV;
+		trace_qaic_create_bo(NULL, "Device under reset.", ret);
 		goto unlock_dev_srcu;
 	}
 
 	bo = qaic_alloc_init_bo();
 	if (IS_ERR(bo)) {
 		ret = PTR_ERR(bo);
+		trace_qaic_create_bo(usr->qddev, "Failed to allocate BO structure.", ret);
 		goto unlock_dev_srcu;
 	}
 	obj = &bo->base;
@@ -715,16 +678,20 @@ int qaic_create_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *fi
 
 	obj->funcs = &qaic_gem_funcs;
 	ret = create_sgt(qdev, &bo->sgt, size);
-	if (ret)
+	if (ret) {
+		trace_qaic_create_bo(usr->qddev, "Failed create_sgt().", ret);
 		goto free_bo;
+	}
 
 	ret = drm_gem_create_mmap_offset(obj);
 	if (ret)
 		goto free_bo;
 
 	ret = drm_gem_handle_create(file_priv, obj, &args->handle);
-	if (ret)
+	if (ret) {
+		trace_qaic_create_bo(usr->qddev, "Failed to create gem handle.", ret);
 		goto free_bo;
+	}
 
 	bo->handle = args->handle;
 	drm_gem_object_put(obj);
@@ -755,6 +722,7 @@ int qaic_mmap_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *file
 	usr_rcu_id = srcu_read_lock(&usr->qddev_lock);
 	if (!usr->qddev) {
 		ret = -ENODEV;
+		trace_qaic_mmap(NULL, "Device not available.", ret);
 		goto unlock_usr_srcu;
 	}
 
@@ -762,12 +730,14 @@ int qaic_mmap_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *file
 	qdev_rcu_id = srcu_read_lock(&qdev->dev_lock);
 	if (qdev->dev_state != QAIC_ONLINE) {
 		ret = -ENODEV;
+		trace_qaic_mmap(NULL, "Device under reset.", ret);
 		goto unlock_dev_srcu;
 	}
 
 	obj = drm_gem_object_lookup(file_priv, args->handle);
 	if (!obj) {
 		ret = -ENOENT;
+		trace_qaic_mmap_1(usr->qddev, "No entry found for handle %llu.", args->handle);
 		goto unlock_dev_srcu;
 	}
 
@@ -784,6 +754,7 @@ unlock_usr_srcu:
 
 struct drm_gem_object *qaic_gem_prime_import(struct drm_device *dev, struct dma_buf *dma_buf)
 {
+	struct qaic_drm_device *qddev = to_qaic_drm_device(dev);
 	struct dma_buf_attachment *attach;
 	struct drm_gem_object *obj;
 	struct qaic_bo *bo;
@@ -801,11 +772,13 @@ struct drm_gem_object *qaic_gem_prime_import(struct drm_device *dev, struct dma_
 	attach = dma_buf_attach(dma_buf, dev->dev);
 	if (IS_ERR(attach)) {
 		ret = PTR_ERR(attach);
+		trace_qaic_create_bo(qddev, "Failed to attach DMABUF.", ret);
 		goto attach_fail;
 	}
 
 	if (!attach->dmabuf->size) {
 		ret = -EINVAL;
+		trace_qaic_create_bo(qddev, "Invalid DMABUF size.", ret);
 		goto size_align_fail;
 	}
 
@@ -840,6 +813,7 @@ static int qaic_prepare_import_bo(struct qaic_bo *bo, struct qaic_attach_slice_h
 	sgt = dma_buf_map_attachment(obj->import_attach, hdr->dir);
 	if (IS_ERR(sgt)) {
 		ret = PTR_ERR(sgt);
+		trace_qaic_attach_slice_bo(NULL, "Failed dma_buf_map_attachment().", ret);
 		return ret;
 	}
 
@@ -854,8 +828,10 @@ static int qaic_prepare_export_bo(struct qaic_device *qdev, struct qaic_bo *bo,
 	int ret;
 
 	ret = dma_map_sgtable(&qdev->pdev->dev, bo->sgt, hdr->dir, 0);
-	if (ret)
+	if (ret) {
+		trace_qaic_attach_slice_bo(NULL, "Failed dma_map_sgtable().", ret);
 		return -EFAULT;
+	}
 
 	return 0;
 }
@@ -926,6 +902,8 @@ static int qaic_attach_slicing_bo(struct qaic_device *qdev, struct qaic_bo *bo,
 
 	if (bo->total_slice_nents > bo->dbc->nelem) {
 		qaic_free_slices_bo(bo);
+		trace_qaic_attach_slice_bo_2(NULL, "Too many requests for DBC queue. Queue size %llu total req for this BO %llu.",
+					     bo->dbc->nelem, bo->total_slice_nents);
 		return -ENOSPC;
 	}
 
@@ -946,23 +924,33 @@ int qaic_attach_slice_bo_ioctl(struct drm_device *dev, void *data, struct drm_fi
 	struct qaic_bo *bo;
 	int ret;
 
-	if (args->hdr.count == 0)
+	if (args->hdr.count == 0) {
+		trace_qaic_attach_slice_bo(NULL, "Invalid slice count 0.", -EINVAL);
 		return -EINVAL;
+	}
 
 	arg_size = args->hdr.count * sizeof(*slice_ent);
-	if (arg_size / args->hdr.count != sizeof(*slice_ent))
+	if (arg_size / args->hdr.count != sizeof(*slice_ent)) {
+		trace_qaic_attach_slice_bo_2(NULL, "User data size overflow count=%llu size of one entry %llu.",
+					     args->hdr.count, sizeof(*slice_ent));
 		return -EINVAL;
+	}
 
-	if (!(args->hdr.dir == DMA_TO_DEVICE || args->hdr.dir == DMA_FROM_DEVICE))
+	if (!(args->hdr.dir == DMA_TO_DEVICE || args->hdr.dir == DMA_FROM_DEVICE)) {
+		trace_qaic_attach_slice_bo_1(NULL, "Invalid DMA direction %llu.", args->hdr.dir);
 		return -EINVAL;
+	}
 
-	if (args->data == 0)
+	if (args->data == 0) {
+		trace_qaic_attach_slice_bo(NULL, "Invalid user data NULL.", -EINVAL);
 		return -EINVAL;
+	}
 
 	usr = file_priv->driver_priv;
 	usr_rcu_id = srcu_read_lock(&usr->qddev_lock);
 	if (!usr->qddev) {
 		ret = -ENODEV;
+		trace_qaic_attach_slice_bo(NULL, "Device not available.", ret);
 		goto unlock_usr_srcu;
 	}
 
@@ -970,11 +958,13 @@ int qaic_attach_slice_bo_ioctl(struct drm_device *dev, void *data, struct drm_fi
 	qdev_rcu_id = srcu_read_lock(&qdev->dev_lock);
 	if (qdev->dev_state != QAIC_ONLINE) {
 		ret = -ENODEV;
+		trace_qaic_attach_slice_bo(NULL, "Device under reset.", ret);
 		goto unlock_dev_srcu;
 	}
 
 	if (args->hdr.dbc_id >= qdev->num_dbc) {
 		ret = -EINVAL;
+		trace_qaic_attach_slice_bo_1(usr->qddev, "Invalid dbc_id=%llu.", args->hdr.dbc_id);
 		goto unlock_dev_srcu;
 	}
 
@@ -983,32 +973,41 @@ int qaic_attach_slice_bo_ioctl(struct drm_device *dev, void *data, struct drm_fi
 	slice_ent = kzalloc(arg_size, GFP_KERNEL);
 	if (!slice_ent) {
 		ret = -EINVAL;
+		trace_qaic_attach_slice_bo(usr->qddev, "Failed to allocate user data.", ret);
 		goto unlock_dev_srcu;
 	}
 
 	ret = copy_from_user(slice_ent, user_data, arg_size);
 	if (ret) {
 		ret = -EFAULT;
+		trace_qaic_attach_slice_bo(usr->qddev, "Failed to copy data from user.", ret);
 		goto free_slice_ent;
 	}
 
 	obj = drm_gem_object_lookup(file_priv, args->hdr.handle);
 	if (!obj) {
 		ret = -ENOENT;
+		trace_qaic_attach_slice_bo_1(usr->qddev, "No entry found for handle %llu.",
+					     args->hdr.handle);
 		goto free_slice_ent;
 	}
 
 	ret = qaic_validate_req(qdev, slice_ent, args->hdr.count, obj->size);
-	if (ret)
+	if (ret) {
+		trace_qaic_attach_slice_bo(usr->qddev, "Failed to validate user data.", ret);
 		goto put_bo;
+	}
 
 	bo = to_qaic_bo(obj);
 	ret = mutex_lock_interruptible(&bo->lock);
-	if (ret)
+	if (ret) {
+		trace_qaic_attach_slice_bo(usr->qddev, "BO mutex lock interrrupted.", ret);
 		goto put_bo;
+	}
 
 	if (bo->sliced) {
 		ret = -EINVAL;
+		trace_qaic_attach_slice_bo(usr->qddev, "BO is already slice.", ret);
 		goto unlock_bo;
 	}
 
@@ -1016,21 +1015,27 @@ int qaic_attach_slice_bo_ioctl(struct drm_device *dev, void *data, struct drm_fi
 	rcu_id = srcu_read_lock(&dbc->ch_lock);
 	if (dbc->usr != usr) {
 		ret = -EINVAL;
+		trace_qaic_attach_slice_bo(usr->qddev, "Invalid user.", ret);
 		goto unlock_ch_srcu;
 	}
 
 	if (dbc->in_ssr) {
 		ret = -EPIPE;
+		trace_qaic_attach_slice_bo_1(usr->qddev, "SSR in progress. dbc_id=%llu", dbc->id);
 		goto unlock_ch_srcu;
 	}
 
 	ret = qaic_prepare_bo(qdev, bo, &args->hdr);
-	if (ret)
+	if (ret) {
+		trace_qaic_attach_slice_bo(usr->qddev, "Failed qaic_prepare_bo().", ret);
 		goto unlock_ch_srcu;
+	}
 
 	ret = qaic_attach_slicing_bo(qdev, bo, &args->hdr, slice_ent);
-	if (ret)
+	if (ret) {
+		trace_qaic_attach_slice_bo(usr->qddev, "Failed qaic_attach_slicing_bo().", ret);
 		goto unprepare_bo;
+	}
 
 	if (args->hdr.dir == DMA_TO_DEVICE)
 		dma_sync_sgtable_for_cpu(&qdev->pdev->dev, bo->sgt, args->hdr.dir);
@@ -1081,8 +1086,11 @@ static inline int copy_exec_reqs(struct qaic_device *qdev, struct bo_slice *slic
 	u32 avail;
 
 	avail = fifo_space_avail(head, tail, dbc->nelem);
-	if (avail < slice->nents)
+	if (avail < slice->nents) {
+		trace_qaic_execute_2(NULL, "Not enough space in queue. Space needed %llu and space available %llu.",
+				     slice->nents, avail);
 		return -EAGAIN;
+	}
 
 	if (tail + slice->nents > dbc->nelem) {
 		avail = dbc->nelem - tail;
@@ -1127,8 +1135,11 @@ static inline int copy_partial_exec_reqs(struct qaic_device *qdev, struct bo_sli
 		else
 			break;
 
-	if (avail < (first_n + 1))
+	if (avail < (first_n + 1)) {
+		trace_qaic_execute_2(NULL, "Not enough space in queue. Space needed %llu and space available %llu.",
+				     (first_n + 1), avail);
 		return -EAGAIN;
+	}
 
 	if (first_n) {
 		if (tail + first_n > dbc->nelem) {
@@ -1178,33 +1189,41 @@ static int send_bo_list_to_device(struct qaic_device *qdev, struct drm_file *fil
 	struct bo_slice *slice;
 	unsigned long flags;
 	struct qaic_bo *bo;
+	u32 handle;
 	int i, j;
 	int ret;
 
 	for (i = 0; i < count; i++) {
+		handle = is_partial ? pexec[i].handle : exec[i].handle;
 		/*
 		 * ref count will be decremented when the transfer of this
 		 * buffer is complete. It is inside dbc_irq_threaded_fn().
 		 */
-		obj = drm_gem_object_lookup(file_priv,
-					    is_partial ? pexec[i].handle : exec[i].handle);
+		obj = drm_gem_object_lookup(file_priv, handle);
 		if (!obj) {
 			ret = -ENOENT;
+			trace_qaic_execute_1(qdev->qddev, "No entry found for handle %llu.",
+					     handle);
 			goto failed_to_send_bo;
 		}
 
 		bo = to_qaic_bo(obj);
 		ret = mutex_lock_interruptible(&bo->lock);
-		if (ret)
+		if (ret) {
+			trace_qaic_execute(qdev->qddev, "BO mutex lock interrrupted.", ret);
 			goto failed_to_send_bo;
+		}
 
 		if (!bo->sliced) {
 			ret = -EINVAL;
+			trace_qaic_execute_1(qdev->qddev, "BO(handle=%llu) not sliced.", handle);
 			goto unlock_bo;
 		}
 
 		if (is_partial && pexec[i].resize > bo->base.size) {
 			ret = -EINVAL;
+			trace_qaic_execute_2(NULL, "Resize cannot be more then BO size. resize=%llu and BO size %llu.",
+					     pexec[i].resize, bo->base.size);
 			goto unlock_bo;
 		}
 
@@ -1212,6 +1231,8 @@ static int send_bo_list_to_device(struct qaic_device *qdev, struct drm_file *fil
 		if (bo_queued(bo)) {
 			spin_unlock_irqrestore(&dbc->xfer_lock, flags);
 			ret = -EINVAL;
+			trace_qaic_execute_1(qdev->qddev, "This BO(handle=%llu) is already queued.",
+					     handle);
 			goto unlock_bo;
 		}
 
@@ -1232,6 +1253,7 @@ static int send_bo_list_to_device(struct qaic_device *qdev, struct drm_file *fil
 			else
 				ret = copy_exec_reqs(qdev, slice, dbc->id, head, tail);
 			if (ret) {
+				trace_qaic_execute(qdev->qddev, "copy_*_exec_reqs() failed.", ret);
 				spin_unlock_irqrestore(&dbc->xfer_lock, flags);
 				goto unlock_bo;
 			}
@@ -1316,17 +1338,23 @@ static int __qaic_execute_bo_ioctl(struct drm_device *dev, void *data, struct dr
 
 	size = is_partial ? sizeof(struct qaic_partial_execute_entry) : sizeof(*exec);
 	n = (unsigned long)size * args->hdr.count;
-	if (args->hdr.count == 0 || n / args->hdr.count != size)
+	if (args->hdr.count == 0 || n / args->hdr.count != size) {
+		trace_qaic_execute_2(NULL, "Invalid user data size. count=%llu size per entry %llu.",
+				     args->hdr.count, size);
 		return -EINVAL;
+	}
 
 	user_data = u64_to_user_ptr(args->data);
 
 	exec = kcalloc(args->hdr.count, size, GFP_KERNEL);
-	if (!exec)
+	if (!exec) {
+		trace_qaic_execute(NULL, "Failed to allocate user data buffer.", -ENOMEM);
 		return -ENOMEM;
+	}
 
 	if (copy_from_user(exec, user_data, n)) {
 		ret = -EFAULT;
+		trace_qaic_execute(NULL, "Failed to copy data from user.", ret);
 		goto free_exec;
 	}
 
@@ -1334,6 +1362,7 @@ static int __qaic_execute_bo_ioctl(struct drm_device *dev, void *data, struct dr
 	usr_rcu_id = srcu_read_lock(&usr->qddev_lock);
 	if (!usr->qddev) {
 		ret = -ENODEV;
+		trace_qaic_execute(NULL, "Device not available.", ret);
 		goto unlock_usr_srcu;
 	}
 
@@ -1341,11 +1370,13 @@ static int __qaic_execute_bo_ioctl(struct drm_device *dev, void *data, struct dr
 	qdev_rcu_id = srcu_read_lock(&qdev->dev_lock);
 	if (qdev->dev_state != QAIC_ONLINE) {
 		ret = -ENODEV;
+		trace_qaic_execute(NULL, "Device under reset.", ret);
 		goto unlock_dev_srcu;
 	}
 
 	if (args->hdr.dbc_id >= qdev->num_dbc) {
 		ret = -EINVAL;
+		trace_qaic_execute_1(usr->qddev, "Invalid dbc_id=%llu.", args->hdr.dbc_id);
 		goto unlock_dev_srcu;
 	}
 
@@ -1354,11 +1385,13 @@ static int __qaic_execute_bo_ioctl(struct drm_device *dev, void *data, struct dr
 	rcu_id = srcu_read_lock(&dbc->ch_lock);
 	if (!dbc->usr || dbc->usr->handle != usr->handle) {
 		ret = -EPERM;
+		trace_qaic_execute(usr->qddev, "Invalid user.", ret);
 		goto release_ch_rcu;
 	}
 
 	if (dbc->in_ssr) {
 		ret = -EPIPE;
+		trace_qaic_execute_1(usr->qddev, "SSR in progress. dbc_id=%llu", dbc->id);
 		goto release_ch_rcu;
 	}
 
@@ -1368,6 +1401,7 @@ static int __qaic_execute_bo_ioctl(struct drm_device *dev, void *data, struct dr
 	if (head == U32_MAX || tail == U32_MAX) {
 		/* PCI link error */
 		ret = -ENODEV;
+		trace_qaic_execute(usr->qddev, "PCI link error.", ret);
 		goto release_ch_rcu;
 	}
 
@@ -1375,8 +1409,10 @@ static int __qaic_execute_bo_ioctl(struct drm_device *dev, void *data, struct dr
 
 	ret = send_bo_list_to_device(qdev, file_priv, exec, args->hdr.count, is_partial, dbc,
 				     head, &tail);
-	if (ret)
+	if (ret) {
+		trace_qaic_execute(usr->qddev, "Failed send_bo_list_to_device().", ret);
 		goto release_ch_rcu;
+	}
 
 	/* Finalize commit to hardware */
 	submit_ts = ktime_get_ns();
@@ -1677,13 +1713,16 @@ int qaic_wait_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *file
 	int rcu_id;
 	int ret;
 
-	if (args->pad != 0)
+	if (args->pad != 0) {
+		trace_qaic_wait(NULL, "Invalid padding.", ret);
 		return -EINVAL;
+	}
 
 	usr = file_priv->driver_priv;
 	usr_rcu_id = srcu_read_lock(&usr->qddev_lock);
 	if (!usr->qddev) {
 		ret = -ENODEV;
+		trace_qaic_wait(NULL, "Device not available.", ret);
 		goto unlock_usr_srcu;
 	}
 
@@ -1691,11 +1730,13 @@ int qaic_wait_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *file
 	qdev_rcu_id = srcu_read_lock(&qdev->dev_lock);
 	if (qdev->dev_state != QAIC_ONLINE) {
 		ret = -ENODEV;
+		trace_qaic_wait(NULL, "Device under reset.", ret);
 		goto unlock_dev_srcu;
 	}
 
 	if (args->dbc_id >= qdev->num_dbc) {
 		ret = -EINVAL;
+		trace_qaic_wait_1(usr->qddev, "Invalid dbc_id=%llu.", args->dbc_id);
 		goto unlock_dev_srcu;
 	}
 
@@ -1704,17 +1745,20 @@ int qaic_wait_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *file
 	rcu_id = srcu_read_lock(&dbc->ch_lock);
 	if (dbc->usr != usr) {
 		ret = -EPERM;
+		trace_qaic_wait(usr->qddev, "Invalid user.", ret);
 		goto unlock_ch_srcu;
 	}
 
 	if (dbc->in_ssr) {
 		ret = -EPIPE;
+		trace_qaic_wait_1(usr->qddev, "SSR in progress dbc_id=%llu", dbc->id);
 		goto unlock_ch_srcu;
 	}
 
 	obj = drm_gem_object_lookup(file_priv, args->handle);
 	if (!obj) {
 		ret = -ENOENT;
+		trace_qaic_wait_1(usr->qddev, "No entry found for handle %llu.", args->handle);
 		goto unlock_ch_srcu;
 	}
 
@@ -1724,15 +1768,20 @@ int qaic_wait_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *file
 	ret = wait_for_completion_interruptible_timeout(&bo->xfer_done, timeout);
 	if (!ret) {
 		ret = -ETIMEDOUT;
+		trace_qaic_wait(usr->qddev, "Wait timed out.", ret);
 		goto put_obj;
 	}
 	if (ret > 0)
 		ret = 0;
 
-	if (!dbc->usr)
+	if (!dbc->usr) {
 		ret = -EPERM;
-	if (dbc->in_ssr)
+		trace_qaic_wait(usr->qddev, "User went away while waiting.", ret);
+	}
+	if (dbc->in_ssr) {
 		ret = -EPIPE;
+		trace_qaic_wait(usr->qddev, "SSR occurred while waiting.", ret);
+	}
 
 put_obj:
 	drm_gem_object_put(obj);
@@ -1760,6 +1809,7 @@ int qaic_perf_stats_bo_ioctl(struct drm_device *dev, void *data, struct drm_file
 	usr_rcu_id = srcu_read_lock(&usr->qddev_lock);
 	if (!usr->qddev) {
 		ret = -ENODEV;
+		trace_qaic_stats(NULL, "Device not available.", ret);
 		goto unlock_usr_srcu;
 	}
 
@@ -1767,23 +1817,29 @@ int qaic_perf_stats_bo_ioctl(struct drm_device *dev, void *data, struct drm_file
 	qdev_rcu_id = srcu_read_lock(&qdev->dev_lock);
 	if (qdev->dev_state != QAIC_ONLINE) {
 		ret = -ENODEV;
+		trace_qaic_stats(NULL, "Device under reset.", ret);
 		goto unlock_dev_srcu;
 	}
 
 	if (args->hdr.dbc_id >= qdev->num_dbc) {
 		ret = -EINVAL;
+		trace_qaic_stats_1(usr->qddev, "Invalid dbc_id=%llu.", args->hdr.dbc_id);
 		goto unlock_dev_srcu;
 	}
 
 	ent = kcalloc(args->hdr.count, sizeof(*ent), GFP_KERNEL);
 	if (!ent) {
 		ret = -EINVAL;
+		trace_qaic_stats_2(usr->qddev, "Failed allocate user data buffer. count %llu size of a entry %llu",
+				   args->hdr.count, sizeof(*ent));
 		goto unlock_dev_srcu;
 	}
 
 	ret = copy_from_user(ent, u64_to_user_ptr(args->data), args->hdr.count * sizeof(*ent));
 	if (ret) {
 		ret = -EFAULT;
+		trace_qaic_stats_2(usr->qddev, "Failed to copy data from user buffer. count %llu size of a entry %llu",
+				   args->hdr.count, sizeof(*ent));
 		goto free_ent;
 	}
 
@@ -1791,6 +1847,8 @@ int qaic_perf_stats_bo_ioctl(struct drm_device *dev, void *data, struct drm_file
 		obj = drm_gem_object_lookup(file_priv, ent[i].handle);
 		if (!obj) {
 			ret = -ENOENT;
+			trace_qaic_stats_1(usr->qddev, "No entry found for handle %llu.",
+					   ent[i].handle);
 			goto free_ent;
 		}
 		bo = to_qaic_bo(obj);
@@ -1811,8 +1869,10 @@ int qaic_perf_stats_bo_ioctl(struct drm_device *dev, void *data, struct drm_file
 		drm_gem_object_put(obj);
 	}
 
-	if (copy_to_user(u64_to_user_ptr(args->data), ent, args->hdr.count * sizeof(*ent)))
+	if (copy_to_user(u64_to_user_ptr(args->data), ent, args->hdr.count * sizeof(*ent))) {
 		ret = -EFAULT;
+		trace_qaic_stats(usr->qddev, "Failed to copy data to user buffer.", ret);
+	}
 
 free_ent:
 	kfree(ent);
@@ -1844,13 +1904,16 @@ int qaic_detach_slice_bo_ioctl(struct drm_device *dev, void *data, struct drm_fi
 	struct qaic_bo *bo;
 	int ret;
 
-	if (args->pad != 0)
+	if (args->pad != 0) {
+		trace_qaic_detach(NULL, "Failed to copy data to user buffer.", -EINVAL);
 		return -EINVAL;
+	}
 
 	usr = file_priv->driver_priv;
 	usr_rcu_id = srcu_read_lock(&usr->qddev_lock);
 	if (!usr->qddev) {
 		ret = -ENODEV;
+		trace_qaic_detach(NULL, "Device not available.", ret);
 		goto unlock_usr_srcu;
 	}
 
@@ -1858,22 +1921,27 @@ int qaic_detach_slice_bo_ioctl(struct drm_device *dev, void *data, struct drm_fi
 	qdev_rcu_id = srcu_read_lock(&qdev->dev_lock);
 	if (qdev->dev_state != QAIC_ONLINE) {
 		ret = -ENODEV;
+		trace_qaic_detach(NULL, "Device under reset.", ret);
 		goto unlock_dev_srcu;
 	}
 
 	obj = drm_gem_object_lookup(file_priv, args->handle);
 	if (!obj) {
 		ret = -ENOENT;
+		trace_qaic_detach_1(usr->qddev, "No entry found for handle %llu.", args->handle);
 		goto unlock_dev_srcu;
 	}
 
 	bo = to_qaic_bo(obj);
 	ret = mutex_lock_interruptible(&bo->lock);
-	if (ret)
+	if (ret) {
+		trace_qaic_detach(usr->qddev, "Failed to grab BO mutex.", ret);
 		goto put_bo;
+	}
 
 	if (!bo->sliced) {
 		ret = -EINVAL;
+		trace_qaic_detach_1(usr->qddev, "BO(handle=%llu) already detached.", args->handle);
 		goto unlock_bo;
 	}
 
@@ -1881,6 +1949,7 @@ int qaic_detach_slice_bo_ioctl(struct drm_device *dev, void *data, struct drm_fi
 	rcu_id = srcu_read_lock(&dbc->ch_lock);
 	if (dbc->usr != usr) {
 		ret = -EINVAL;
+		trace_qaic_detach(usr->qddev, "Invalid user.", ret);
 		goto unlock_ch_srcu;
 	}
 
@@ -1889,6 +1958,7 @@ int qaic_detach_slice_bo_ioctl(struct drm_device *dev, void *data, struct drm_fi
 	if (bo_queued(bo)) {
 		spin_unlock_irqrestore(&dbc->xfer_lock, flags);
 		ret = -EBUSY;
+		trace_qaic_detach_1(usr->qddev, "BO(handle=%llu) is commited to HW.", args->handle);
 		goto unlock_ch_srcu;
 	}
 	spin_unlock_irqrestore(&dbc->xfer_lock, flags);

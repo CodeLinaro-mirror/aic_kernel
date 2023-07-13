@@ -13,9 +13,11 @@
 
 #include "qaic.h"
 #include "qaic_ssr.h"
+#include "qaic_trace.h"
 
 #define MSG_BUF_SZ 32
 #define READ_RSP_BUF_PAGE_ORDER 2
+#define to_qddev(dump_info) ((dump_info)->dbc->qdev->qddev)
 
 enum ssr_cmds {
 	DEBUG_TRANSFER_INFO =		BIT(0),
@@ -217,8 +219,11 @@ static int alloc_dump(struct ssr_dump_info *dump_info)
 		le64_to_cpus(&tbl_ent->mem_base);
 		le64_to_cpus(&tbl_ent->len);
 
-		if (tbl_ent->len == 0)
+		if (tbl_ent->len == 0) {
+			trace_qaic_ssr_1(to_qddev(dump_info), "Invalid table entry len at index %llu.",
+					 tbl_sz_lp / sizeof(*tbl_ent));
 			return -EINVAL;
+		}
 
 		dump_size += tbl_ent->len;
 		tbl_ent++;
@@ -227,8 +232,10 @@ static int alloc_dump(struct ssr_dump_info *dump_info)
 
 	dump_info->dump_sz = dump_size + dump_info->tbl_len + sizeof(*dump_meta);
 	dump_info->dump_addr = vzalloc(dump_info->dump_sz);
-	if (!dump_info->dump_addr)
+	if (!dump_info->dump_addr) {
+		trace_qaic_ssr(to_qddev(dump_info), "Failed to allocate memory for entire dump.", -ENOMEM);
 		return -ENOMEM;
+	}
 
 	/* Copy crashdump meta and table */
 	dump_meta = dump_info->dump_addr;
@@ -249,20 +256,25 @@ static int send_xfer_done(struct qaic_device *qdev, void *resp, u32 dbc_id)
 	xfer_done = kmalloc(sizeof(*xfer_done), GFP_KERNEL);
 	if (!xfer_done) {
 		ret = -ENOMEM;
+		trace_qaic_ssr(qdev->qddev, "Failed to allocate memory for dbg resp buffer.", ret);
 		goto out;
 	}
 
 	ret = mhi_queue_buf(qdev->ssr_ch, DMA_FROM_DEVICE, resp, MSG_BUF_SZ, MHI_EOT);
-	if (ret)
+	if (ret) {
+		trace_qaic_ssr(qdev->qddev, "MHI failed to queue dbg resp buffer.", ret);
 		goto free_xfer_done;
+	}
 
 	xfer_done->hdr.cmd = cpu_to_le32(DEBUG_TRANSFER_DONE);
 	xfer_done->hdr.len = cpu_to_le32(sizeof(*xfer_done));
 	xfer_done->hdr.dbc_id = cpu_to_le32(dbc_id);
 
 	ret = mhi_queue_buf(qdev->ssr_ch, DMA_TO_DEVICE, xfer_done, sizeof(*xfer_done), MHI_EOT);
-	if (ret)
+	if (ret) {
+		trace_qaic_ssr(qdev->qddev, "MHI failed to queue dbg req buffer.", ret);
 		goto free_xfer_done;
+	}
 
 	return 0;
 
@@ -281,10 +293,13 @@ static int mem_read_req(struct qaic_device *qdev, struct ssr_dump_info *dump_inf
 
 	ret = mhi_queue_buf(qdev->ssr_ch, DMA_FROM_DEVICE, dump_info->read_buf_rsp->data,
 			    dump_info->read_buf_rsp_sz, MHI_EOT);
-	if (ret)
+	if (ret) {
+		trace_qaic_ssr(qdev->qddev, "MHI failed to queue read resp buffer.", ret);
 		goto out;
-	else
+	}
+	else {
 		dump_info->read_buf_rsp_queued = true;
+	}
 
 
 	read_buf_req->hdr.cmd = cpu_to_le32(MEMORY_READ);
@@ -297,6 +312,8 @@ static int mem_read_req(struct qaic_device *qdev, struct ssr_dump_info *dump_inf
 			    MHI_EOT);
 	if (!ret)
 		dump_info->read_buf_req_queued = true;
+	else
+		trace_qaic_ssr(qdev->qddev, "MHI failed to queue read req buffer.", ret);
 
 out:
 	return ret;
@@ -304,8 +321,11 @@ out:
 
 static int ssr_copy_table(struct ssr_dump_info *dump_info, void *data, u64 len)
 {
-	if (len > dump_info->tbl_len - dump_info->tbl_off)
+	if (len > dump_info->tbl_len - dump_info->tbl_off) {
+		trace_qaic_ssr_3(to_qddev(dump_info), "Table chunk too large. chunk %llu total table size %llu table offset %llu.",
+				 len, dump_info->tbl_len, dump_info->tbl_off);
 		return -EINVAL;
+	}
 
 	memcpy(dump_info->tbl_addr + dump_info->tbl_off, data, len);
 	dump_info->tbl_off += len;
@@ -325,8 +345,11 @@ static int ssr_copy_dump(struct ssr_dump_info *dump_info, void *data, u64 len)
 
 	tbl_ent = dump_info->tbl_ent;
 
-	if (len > tbl_ent->len - dump_info->tbl_ent_off)
+	if (len > tbl_ent->len - dump_info->tbl_ent_off) {
+		trace_qaic_ssr_3(to_qddev(dump_info), "Dump chunk too large. chunk %llu total dump size %llu dump offset %llu.",
+				 len, tbl_ent->len, dump_info->tbl_ent_off);
 		return -EINVAL;
+	}
 
 	memcpy(dump_info->dump_addr + dump_info->dump_off, data, len);
 	dump_info->dump_off += len;
@@ -363,21 +386,31 @@ static void ssr_dump_worker(struct work_struct *work)
 	hdr.len = le32_to_cpu(_hdr->len);
 	hdr.dbc_id = le32_to_cpu(_hdr->dbc_id);
 
-	if (hdr.dbc_id >= qdev->num_dbc)
+	if (hdr.dbc_id >= qdev->num_dbc) {
+		trace_qaic_ssr_1(qdev->qddev, "Invalid dbc_id=%llu.", hdr.dbc_id);
 		goto reset_device;
+	}
 
 	dump_info = qdev->dbc[hdr.dbc_id].dump_info;
 
-	if (!dump_info)
+	if (!dump_info) {
+		trace_qaic_ssr(qdev->qddev, "Invalid state device not in reset.", -EINVAL);
 		goto reset_device;
+	}
 
 	dump_info->read_buf_rsp_queued = false;
 
-	if (hdr.cmd != MEMORY_READ_RSP)
+	if (hdr.cmd != MEMORY_READ_RSP) {
+		trace_qaic_ssr_2(qdev->qddev, "Invalid cmd=%llu. Expected MEMORY_READ_RSP(%llu).",
+				 hdr.cmd, MEMORY_READ_RSP);
 		goto free_dump_info;
+	}
 
-	if (hdr.len > dump_info->read_buf_rsp_sz)
+	if (hdr.len > dump_info->read_buf_rsp_sz) {
+		trace_qaic_ssr_2(qdev->qddev, "Invalid memory read resp len=%llu it cannot exceed %llu.",
+				 hdr.cmd, dump_info->read_buf_rsp_sz);
 		goto free_dump_info;
+	}
 
 	data_len = hdr.len - sizeof(*mem_rd_resp);
 
@@ -386,8 +419,10 @@ static void ssr_dump_worker(struct work_struct *work)
 	else /* Chunk belongs to crashdump */
 		ret = ssr_copy_dump(dump_info, mem_rd_resp->data, data_len);
 
-	if (ret)
+	if (ret) {
+		trace_qaic_ssr(qdev->qddev, "Failed to copy data.", ret);
 		goto free_dump_info;
+	}
 
 	if (dump_info->tbl_off < dump_info->tbl_len) {
 		/* Continue downloading table */
@@ -405,8 +440,10 @@ static void ssr_dump_worker(struct work_struct *work)
 		ret = send_xfer_done(qdev, dump_info->resp->data, hdr.dbc_id);
 	}
 
-	if (ret) /* Most likely a MHI xfer has failed */
+	if (ret) { /* Most likely a MHI xfer has failed */
+		trace_qaic_ssr(qdev->qddev, "MHI transfer failed.", ret);
 		goto free_dump_info;
+	}
 
 	return;
 
@@ -436,6 +473,7 @@ static struct ssr_dump_info *alloc_dump_info(struct qaic_device *qdev,
 	if (debug_info->tbl_len == 0 ||
 	    debug_info->tbl_len % sizeof(struct debug_info_table) != 0) {
 		ret = -EINVAL;
+		trace_qaic_ssr_1(qdev->qddev, "Invalid table size %llu.", debug_info->tbl_len);
 		goto out;
 	}
 
@@ -443,6 +481,7 @@ static struct ssr_dump_info *alloc_dump_info(struct qaic_device *qdev,
 	dump_info = kzalloc(sizeof(*dump_info), GFP_KERNEL);
 	if (!dump_info) {
 		ret = -ENOMEM;
+		trace_qaic_ssr(qdev->qddev, "Failed to allocate SSR metadata.", ret);
 		goto out;
 	}
 
@@ -456,6 +495,7 @@ static struct ssr_dump_info *alloc_dump_info(struct qaic_device *qdev,
 	}
 	if (!dump_info->read_buf_rsp) {
 		ret = -ENOMEM;
+		trace_qaic_ssr(qdev->qddev, "Failed to allocate memory read resp buffer.", ret);
 		goto free_dump_info;
 	}
 
@@ -463,6 +503,7 @@ static struct ssr_dump_info *alloc_dump_info(struct qaic_device *qdev,
 	dump_info->read_buf_req = kzalloc(sizeof(*dump_info->read_buf_req), GFP_KERNEL);
 	if (!dump_info->read_buf_req) {
 		ret = -ENOMEM;
+		trace_qaic_ssr(qdev->qddev, "Failed to allocate memory read req buffer.", ret);
 		goto free_read_buf_rsp;
 	}
 
@@ -470,6 +511,7 @@ static struct ssr_dump_info *alloc_dump_info(struct qaic_device *qdev,
 	dump_info->tbl_addr = vzalloc(debug_info->tbl_len);
 	if (!dump_info->tbl_addr) {
 		ret = -ENOMEM;
+		trace_qaic_ssr(qdev->qddev, "Failed to allocate table buffer.", ret);
 		goto free_read_buf_req;
 	}
 
@@ -502,11 +544,15 @@ static int dbg_xfer_info_rsp(struct qaic_device *qdev, struct dma_bridge_chan *d
 	int ret = 0;
 
 	debug_rsp = kmalloc(sizeof(*debug_rsp), GFP_KERNEL);
-	if (!debug_rsp)
+	if (!debug_rsp) {
+		trace_qaic_ssr(qdev->qddev, "Failed to allocate dbg rsp buffer.", -ENOMEM);
 		return -ENOMEM;
+	}
 
 	if (dbc->state != DBC_STATE_BEFORE_POWER_UP) {
 		ret = -EINVAL;
+		trace_qaic_ssr_2(qdev->qddev, "Invalid DBC state(%llu) for debug transfer. Expected %llu.",
+				 dbc->state, DBC_STATE_BEFORE_POWER_UP);
 		goto send_rsp;
 	}
 
@@ -514,6 +560,7 @@ static int dbg_xfer_info_rsp(struct qaic_device *qdev, struct dma_bridge_chan *d
 	if (IS_ERR(dump_info)) {
 		ret = PTR_ERR(dump_info);
 		dump_info = NULL;
+		trace_qaic_ssr(qdev->qddev, "Failed alloc_dump_info().", ret);
 	}
 
 send_rsp:
@@ -530,6 +577,7 @@ send_rsp:
 	if (ret) {
 		free_ssr_dump_info(dump_info);
 		kfree(debug_rsp);
+		trace_qaic_ssr(qdev->qddev, "MHI failed to send debug rsp.", ret);
 		return ret;
 	}
 
@@ -543,12 +591,16 @@ static void dbg_xfer_done_rsp(struct qaic_device *qdev, struct dma_bridge_chan *
 {
 	struct device *kdev = to_accel_kdev(qdev->qddev);
 	struct ssr_dump_info *dump_info = dbc->dump_info;
+	u32 status = le32_to_cpu(xfer_rsp->ret);
 
-	if (!dump_info)
+	if (!dump_info) {
+		trace_qaic_ssr(qdev->qddev, "Not in SSR. Invalid dbg transfer done resp.", -EINVAL);
 		return;
+	}
 
-	if (xfer_rsp->ret) {
+	if (status) {
 		free_ssr_dump_info(dump_info);
+		trace_qaic_ssr(qdev->qddev, "SSR transfer done failed.", status);
 		return;
 	}
 
@@ -574,11 +626,16 @@ static void ssr_worker(struct work_struct *work)
 	le32_to_cpus(&hdr->len);
 	le32_to_cpus(&hdr->dbc_id);
 
-	if (hdr->len > MSG_BUF_SZ)
+	if (hdr->len > MSG_BUF_SZ) {
+		trace_qaic_ssr_2(qdev->qddev, "Response size %llu too large. Expected %llu.",
+				 hdr->len, MSG_BUF_SZ);
 		goto out;
+	}
 
-	if (hdr->dbc_id >= qdev->num_dbc)
+	if (hdr->dbc_id >= qdev->num_dbc) {
+		trace_qaic_ssr_1(qdev->qddev, "Invalid dbc_id=%llu.", hdr->dbc_id);
 		goto out;
+	}
 
 	dbc = &qdev->dbc[hdr->dbc_id];
 
@@ -586,8 +643,10 @@ static void ssr_worker(struct work_struct *work)
 	case DEBUG_TRANSFER_INFO:
 		ret = dbg_xfer_info_rsp(qdev, dbc, (struct ssr_debug_transfer_info *)resp->data,
 					&dump_info);
-		if (ret)
+		if (ret) {
+			trace_qaic_ssr(qdev->qddev, "Failed dbg_xfer_info_rsp().", ret);
 			break;
+		}
 
 		dbc->dump_info = dump_info;
 		dump_info->dbc = dbc;
@@ -598,6 +657,7 @@ static void ssr_worker(struct work_struct *work)
 				   min(dump_info->tbl_len, dump_info->chunk_sz));
 		if (ret) {
 			free_ssr_dump_info(dump_info);
+			trace_qaic_ssr(qdev->qddev, "Failed mem_read_req().", ret);
 			break;
 		}
 
@@ -633,6 +693,8 @@ static void ssr_worker(struct work_struct *work)
 			if (dbc->dump_info) {
 				free_ssr_dump_info(dbc->dump_info);
 				ssr_event_ack = SSR_EVENT_NACK;
+				trace_qaic_ssr(qdev->qddev, "Unexpected AFTER_POWER_UP event received dump downloading still in progress.",
+					       ret);
 				break;
 			}
 
@@ -643,8 +705,10 @@ static void ssr_worker(struct work_struct *work)
 		}
 
 		event_rsp = kmalloc(sizeof(*event_rsp), GFP_KERNEL);
-		if (!event_rsp)
+		if (!event_rsp) {
+			trace_qaic_ssr(qdev->qddev, "Failed to create event resp buffer.", -ENOMEM);
 			break;
+		}
 
 		event_rsp->hdr.cmd = cpu_to_le32(SSR_EVENT_RSP);
 		event_rsp->hdr.len = cpu_to_le32(sizeof(*event_rsp));
@@ -653,8 +717,10 @@ static void ssr_worker(struct work_struct *work)
 
 		ret = mhi_queue_buf(qdev->ssr_ch, DMA_TO_DEVICE, event_rsp, sizeof(*event_rsp),
 				    MHI_EOT);
-		if (ret)
+		if (ret) {
+			trace_qaic_ssr(qdev->qddev, "MHI failed to send event resp.", ret);
 			kfree(event_rsp);
+		}
 
 		if (event->event == AFTER_POWER_UP && ssr_event_ack != SSR_EVENT_NACK) {
 			dbc_exit_ssr(qdev, hdr->dbc_id);
@@ -671,8 +737,10 @@ static void ssr_worker(struct work_struct *work)
 
 out:
 	ret = mhi_queue_buf(qdev->ssr_ch, DMA_FROM_DEVICE, resp->data, MSG_BUF_SZ, MHI_EOT);
-	if (ret)
+	if (ret) {
+		trace_qaic_ssr(qdev->qddev, "MHI failed to send resp.", ret);
 		kfree(resp);
+	}
 }
 
 static int qaic_ssr_mhi_probe(struct mhi_device *mhi_dev, const struct mhi_device_id *id)

@@ -333,6 +333,85 @@ struct bo_slice {
 	u64			offset;
 };
 
+struct dbc_req {
+	/*
+	 * A request ID is assigned to each memory handle going in DMA queue.
+	 * As a single memory handle can enqueue multiple elements in DMA queue
+	 * all of them will have the same request ID.
+	 */
+	__le16	req_id;
+	/* Future use */
+	__u8	seq_id;
+	/*
+	 * Special encoded variable
+	 * 7	0 - Do not force to generate MSI after DMA is completed
+	 *	1 - Force to generate MSI after DMA is completed
+	 * 6:5	Reserved
+	 * 4	1 - Generate completion element in the response queue
+	 *	0 - No Completion Code
+	 * 3	0 - DMA request is a Link list transfer
+	 *	1 - DMA request is a Bulk transfer
+	 * 2	Reserved
+	 * 1:0	00 - No DMA transfer involved
+	 *	01 - DMA transfer is part of inbound transfer
+	 *	10 - DMA transfer has outbound transfer
+	 *	11 - NA
+	 */
+	__u8	cmd;
+	__le32	resv;
+	/* Source address for the transfer */
+	__le64	src_addr;
+	/* Destination address for the transfer */
+	__le64	dest_addr;
+	/* Length of transfer request */
+	__le32	len;
+	__le32	resv2;
+	/* Doorbell address */
+	__le64	db_addr;
+	/*
+	 * Special encoded variable
+	 * 7	1 - Doorbell(db) write
+	 *	0 - No doorbell write
+	 * 6:2	Reserved
+	 * 1:0	00 - 32 bit access, db address must be aligned to 32bit-boundary
+	 *	01 - 16 bit access, db address must be aligned to 16bit-boundary
+	 *	10 - 8 bit access, db address must be aligned to 8bit-boundary
+	 *	11 - Reserved
+	 */
+	__u8	db_len;
+	__u8	resv3;
+	__le16	resv4;
+	/* 32 bit data written to doorbell address */
+	__le32	db_data;
+	/*
+	 * Special encoded variable
+	 * All the fields of sem_cmdX are passed from user and all are ORed
+	 * together to form sem_cmd.
+	 * 0:11		Semaphore value
+	 * 15:12	Reserved
+	 * 20:16	Semaphore index
+	 * 21		Reserved
+	 * 22		Semaphore Sync
+	 * 23		Reserved
+	 * 26:24	Semaphore command
+	 * 28:27	Reserved
+	 * 29		Semaphore DMA out bound sync fence
+	 * 30		Semaphore DMA in bound sync fence
+	 * 31		Enable semaphore command
+	 */
+	__le32	sem_cmd0;
+	__le32	sem_cmd1;
+	__le32	sem_cmd2;
+	__le32	sem_cmd3;
+} __packed;
+
+struct dbc_rsp {
+	/* Request ID of the memory handle whose DMA transaction is completed */
+	__le16	req_id;
+	/* Status of the DMA transaction. 0 : Success otherwise failure */
+	__le16	status;
+} __packed;
+
 int get_dbc_req_elem_size(void);
 int get_dbc_rsp_elem_size(void);
 int get_cntl_version(struct qaic_device *qdev, struct qaic_user *usr, u16 *major, u16 *minor);

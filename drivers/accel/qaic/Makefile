@@ -13,7 +13,10 @@ qaic-y := \
 	qaic_ras.o \
 	qaic_ssr.o \
 	qaic_sysfs.o \
-	qaic_timesync.o
+	qaic_timesync.o \
+	qaic_trace_points.o
 
 qaic-$(CONFIG_DEBUG_FS) += qaic_debugfs.o
 qaic-$(CONFIG_DRM_QAIC_HWMON) += qaic_telemetry.o
+
+CFLAGS_qaic_trace_points.o := -I$(src)
