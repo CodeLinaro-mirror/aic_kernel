@@ -54,8 +54,7 @@ enum cmds {
 	CMD_THERMAL_PMIC_TEMP_A,
 	CMD_THERMAL_PMIC_TEMP_C,
 	CMD_THERMAL_PMIC_TEMP_E,
-	CMD_RESET_CONFIG,
-	CMD_RESET_INITIATE,
+	CMD_POWER_ACTION,
 };
 
 enum cmd_type {
@@ -589,7 +588,7 @@ static const struct attribute_group pmic_group = {
 	.attrs = pmic_attrs,
 };
 
-static ssize_t reset_config_store(struct device *dev, struct device_attribute *a, const char *buf,
+static ssize_t power_action_store(struct device *dev, struct device_attribute *a, const char *buf,
 				  size_t count)
 {
 	struct qaic_device *qdev = dev_get_drvdata(dev);
@@ -608,7 +607,7 @@ static ssize_t reset_config_store(struct device *dev, struct device_attribute *a
 		goto exit;
 	}
 
-	ret = telemetry_request(qdev, CMD_RESET_CONFIG, TYPE_WRITE, &val);
+	ret = telemetry_request(qdev, CMD_POWER_ACTION, TYPE_WRITE, &val);
 	if (ret)
 		goto exit;
 
@@ -618,60 +617,10 @@ exit:
 	return ret;
 }
 
-static ssize_t reset_config_show(struct device *dev, struct device_attribute *a, char *buf)
-{
-	struct qaic_device *qdev = dev_get_drvdata(dev);
-	int rcu_id;
-	s64 val;
-	int ret;
-
-	rcu_id = srcu_read_lock(&qdev->dev_lock);
-	if (qdev->dev_state != QAIC_ONLINE) {
-		ret = -ENODEV;
-		goto exit;
-	}
-
-	ret = telemetry_request(qdev, CMD_RESET_CONFIG, TYPE_READ, &val);
-
-exit:
-	srcu_read_unlock(&qdev->dev_lock, rcu_id);
-	if (ret)
-		return ret;
-
-	return sprintf(buf, "%lld\n", val);
-}
-
-static SENSOR_DEVICE_ATTR_RW(reset_config, reset_config, 0);
-
-static ssize_t reset_initiate_store(struct device *dev, struct device_attribute *a, const char *buf,
-				    size_t count)
-{
-	struct qaic_device *qdev = dev_get_drvdata(dev);
-	s64 val = 1;
-	int rcu_id;
-	int ret;
-
-	rcu_id = srcu_read_lock(&qdev->dev_lock);
-	if (qdev->dev_state != QAIC_ONLINE) {
-		ret = -ENODEV;
-		goto exit;
-	}
-
-	ret = telemetry_request(qdev, CMD_RESET_INITIATE, TYPE_WRITE, &val);
-	if (ret)
-		goto exit;
-
-	ret = count;
-exit:
-	srcu_read_unlock(&qdev->dev_lock, rcu_id);
-	return ret;
-}
-
-static SENSOR_DEVICE_ATTR_WO(reset_initiate, reset_initiate, 0);
+static SENSOR_DEVICE_ATTR_WO(power_action, power_action, 0);
 
 static struct attribute *reset_attrs[] = {
-	&sensor_dev_attr_reset_config.dev_attr.attr,
-	&sensor_dev_attr_reset_initiate.dev_attr.attr,
+	&sensor_dev_attr_power_action.dev_attr.attr,
 	NULL,
 };
 
