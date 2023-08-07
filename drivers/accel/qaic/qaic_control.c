@@ -1616,7 +1616,7 @@ void qaic_mhi_dl_xfer_cb(struct mhi_device *mhi_dev, struct mhi_result *mhi_resu
 	u32 magic_nr;
 
 	magic_nr = le32_to_cpu(msg->hdr.magic_number);
-	if (mhi_result->transaction_status || magic_nr != MANAGE_MAGIC_NUMBER) {
+	if (mhi_result->transaction_status || msg->hdr.magic_number != MANAGE_MAGIC_NUMBER) {
 		trace_qaic_manage_2(qdev->qddev, "MHI DL failed. trans status %llu magic number %llu.",
 				    mhi_result->transaction_status, magic_nr);
 		kfree(msg);
