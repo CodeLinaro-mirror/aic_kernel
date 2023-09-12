@@ -250,6 +250,19 @@
 #endif /* COMPILER_HAS_GENERIC_BUILTIN_OVERFLOW */
 #endif /* 4.18.0 Overflow*/
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)) && \
+	!(LINUX_VERSION_CODE < KERNEL_VERSION(5, 16, 0) && \
+		LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 86))
+static inline size_t __must_check size_add(size_t addend1, size_t addend2)
+{
+	size_t bytes;
+
+	if (check_add_overflow(addend1, addend2, &bytes))
+		return SIZE_MAX;
+
+	return bytes;
+}
+#endif
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)) && \
 		(LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 233) || \
