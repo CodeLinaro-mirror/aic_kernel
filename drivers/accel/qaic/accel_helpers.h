@@ -60,6 +60,7 @@
 		DRM_ACCEL_FOPS,\
 	}
 
+#ifndef _ONLY_DRMM_HELP_
 static DEFINE_SPINLOCK(accel_minor_lock);
 static struct idr accel_minors_idr;
 
@@ -92,10 +93,10 @@ static void drm_prime_remove_buf_handle(struct drm_prime_file_private *prime_fpr
 				 uint32_t handle);
 static void drm_gem_open(struct drm_device *dev, struct drm_file *file_private);
 static void drm_gem_release(struct drm_device *dev, struct drm_file *file_private);
-static void drm_file_free(struct drm_file *file);
 static void drm_prime_init_file_private(struct drm_prime_file_private *prime_fpriv);
 static struct drm_file *drm_file_alloc(struct drm_minor *minor);
 static int drm_open_helper(struct file *filp, struct drm_minor *minor);
+#endif //end _ONLY_DRMM_HELP_
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0) && \
 		!(defined(CONFIG_SUSE_VERSION) && \
@@ -108,6 +109,7 @@ static int drm_open_helper(struct file *filp, struct drm_minor *minor);
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 19, 0) && !defined(_QAIC_DRM_MANAGED) && \
 		!(defined(RHEL_MAJOR) && RHEL_MAJOR == 8 && RHEL_MINOR >= 8) && \
 		!(defined(RHEL_MAJOR) && RHEL_MAJOR == 9 && RHEL_MINOR >= 2))
+#ifndef _ONLY_DRMM_HELP_
 static void drmm_mutex_release(struct drm_device *dev, void *res)
 {
 	struct mutex *lock = res;
@@ -121,6 +123,7 @@ static int drmm_mutex_init(struct drm_device *dev, struct mutex *lock)
 
 	return drmm_add_action_or_reset(dev, drmm_mutex_release, lock);
 }
+#endif //end _ONLY_DRMM_HELP_
 #endif
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0) && \
@@ -153,23 +156,6 @@ static void free_dr(struct drmres *dr)
 {
 	kfree_const(dr->node.name);
 	kfree(dr);
-}
-
-static void qaicm_managed_release(struct drm_device *dev)
-{
-	struct drmres *dr, *tmp;
-	struct qaic_drm_device *qddev = to_qaic_drm_device(dev);
-
-	if (!qddev)
-		return;
-
-	list_for_each_entry_safe(dr, tmp, &qddev->managed.resources, node.entry) {
-		if (dr->node.release)
-			dr->node.release(dev, dr->node.size? *(void **)&dr->data : NULL);
-
-		list_del(&dr->node.entry);
-		free_dr(dr);
-	}
 }
 
 static __always_inline struct drmres *alloc_dr(drmres_release_t release,
@@ -218,14 +204,6 @@ static void add_dr(struct drm_device *dev, struct drmres *dr)
 	spin_unlock_irqrestore(&qddev->managed.lock, flags);
 }
 
-static void qaicm_add_final_kfree(struct drm_device *dev, void *container)
-{
-	WARN_ON(to_qaic_drm_device(dev)->managed.final_kfree);
-	WARN_ON(dev < (struct drm_device *) container);
-	WARN_ON(dev + 1 > (struct drm_device *) (container + ksize(container)));
-	to_qaic_drm_device(dev)->managed.final_kfree = container;
-}
-
 static int __qaicm_add_action(struct drm_device *dev, drmres_release_t action, void *data, const char *name)
 {
 	struct drmres *dr;
@@ -260,6 +238,32 @@ static int __qaicm_add_action_or_reset(struct drm_device *dev, drmres_release_t 
 	return ret;
 }
 
+#ifndef _ONLY_DRMM_HELP_
+static void qaicm_add_final_kfree(struct drm_device *dev, void *container)
+{
+	WARN_ON(to_qaic_drm_device(dev)->managed.final_kfree);
+	WARN_ON(dev < (struct drm_device *) container);
+	WARN_ON(dev + 1 > (struct drm_device *) (container + ksize(container)));
+	to_qaic_drm_device(dev)->managed.final_kfree = container;
+}
+
+static void qaicm_managed_release(struct drm_device *dev)
+{
+	struct drmres *dr, *tmp;
+	struct qaic_drm_device *qddev = to_qaic_drm_device(dev);
+
+	if (!qddev)
+		return;
+
+	list_for_each_entry_safe(dr, tmp, &qddev->managed.resources, node.entry) {
+		if (dr->node.release)
+			dr->node.release(dev, dr->node.size ? *(void **)&dr->data : NULL);
+
+		list_del(&dr->node.entry);
+		free_dr(dr);
+	}
+}
+
 static void qaicm_dev_release(struct drm_device *dev)
 {
 	struct qaic_drm_device *qddev = to_qaic_drm_device(dev);
@@ -267,6 +271,7 @@ static void qaicm_dev_release(struct drm_device *dev)
 	qaicm_managed_release(dev); //free all the resources we've alloc'd
 	kfree(qddev->managed.final_kfree); //free drm dev
 }
+#endif //end _ONLY_DRMM_HELP_
 
 static void *qaicm_kmalloc(struct drm_device *dev, size_t size, gfp_t gfp)
 {
@@ -372,15 +377,16 @@ static inline int drmm_mutex_init(struct drm_device *dev, struct mutex *lock)
 
 #endif /* end QAIC_DRM_MANAGED */
 
+#ifndef _ONLY_DRMM_HELP_
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 5, 0))
-static int qaic_accel_gem_object_mmap(struct drm_gem_object *obj, struct vm_area_struct *vma);
+int qaic_accel_gem_object_mmap(struct drm_gem_object *obj, struct vm_area_struct *vma);
 #endif
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0) && \
 		!(defined(RHEL_MAJOR) && \
 			(RHEL_MAJOR == 8) && (RHEL_MINOR >= 1)))
-static void qaic_accel_free_object(struct drm_gem_object *obj);
+void qaic_accel_free_object(struct drm_gem_object *obj);
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16 ,0))
-static void qaic_accel_gem_print_info(struct drm_printer *p, unsigned int indent,
+void qaic_accel_gem_print_info(struct drm_printer *p, unsigned int indent,
 				const struct drm_gem_object *obj);
 #endif /* end >=4.16.0 */
 #endif /* end <5.0.0 */
@@ -469,30 +475,6 @@ static int accel_gem_mmap(struct file *filp, struct vm_area_struct *vma)
 	return ret;
 }
 #endif //end 5.5 mmap
-
-static void drm_events_release(struct drm_file *file_priv)
-{
-	struct drm_device *dev = file_priv->minor->dev;
-	struct drm_pending_event *e, *et;
-	unsigned long flags;
-
-	spin_lock_irqsave(&dev->event_lock, flags);
-
-	/* Unlink pending events */
-	list_for_each_entry_safe(e, et, &file_priv->pending_event_list,
-				 pending_link) {
-		list_del(&e->pending_link);
-		e->file_priv = NULL;
-	}
-
-	/* Remove unconsumed events */
-	list_for_each_entry_safe(e, et, &file_priv->event_list, link) {
-		list_del(&e->link);
-		kfree(e);
-	}
-
-	spin_unlock_irqrestore(&dev->event_lock, flags);
-}
 
 static void drm_prime_remove_buf_handle(struct drm_prime_file_private *prime_fpriv,
 				 uint32_t handle)
@@ -597,45 +579,6 @@ static void drm_gem_release(struct drm_device *dev, struct drm_file *file_privat
 	idr_for_each(&file_private->object_idr,
 		     &drm_gem_object_release_handle, file_private);
 	idr_destroy(&file_private->object_idr);
-}
-
-static void drm_file_free(struct drm_file *file)
-{
-	struct drm_device *dev;
-
-	if (!file)
-		return;
-
-	dev = file->minor->dev;
-
-	DRM_DEBUG("comm=\"%s\", pid=%d, dev=0x%lx, open_count=%d\n",
-		  current->comm, task_pid_nr(current),
-		  (long)old_encode_dev(file->minor->kdev->devt),
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 7, 0) && \
-		!(defined(CONFIG_SUSE_VERSION) && \
-			CONFIG_SUSE_VERSION == 15 && CONFIG_SUSE_PATCHLEVEL >= 3) && \
-		!(defined(RHEL_MAJOR) && \
-			RHEL_MAJOR == 8 && RHEL_MINOR >= 4))
-		  dev->open_count
-#else
-		  atomic_read(&dev->open_count)
-#endif
-		  );
-
-	drm_events_release(file);
-
-	if (drm_core_check_feature(dev, DRIVER_GEM))
-		drm_gem_release(dev, file);
-
-	if (dev->driver->postclose)
-		dev->driver->postclose(dev, file);
-
-	WARN_ON(!RB_EMPTY_ROOT(&file->prime.dmabufs));
-
-	WARN_ON(!list_empty(&file->event_list));
-
-	put_pid(file->pid);
-	kfree(file);
 }
 
 static void drm_prime_init_file_private(struct drm_prime_file_private *prime_fpriv)
@@ -1214,6 +1157,7 @@ static void accel_exit(void)
 	accel_sysfs_destroy();
 	idr_destroy(&accel_minors_idr);
 }
+#endif //end _ONLY_DRMM_HELP_
 #endif //end LINUX_VERSION_CODE < 6.2.0
 
 #endif //end _QAIC_ACCEL_HELPERS
