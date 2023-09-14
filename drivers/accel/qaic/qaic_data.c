@@ -1714,8 +1714,9 @@ int qaic_wait_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *file
 	int ret;
 
 	if (args->pad != 0) {
+		ret = -EINVAL;
 		trace_qaic_wait(NULL, "Invalid padding.", ret);
-		return -EINVAL;
+		return ret;
 	}
 
 	usr = file_priv->driver_priv;

@@ -694,7 +694,7 @@ static void ssr_worker(struct work_struct *work)
 				free_ssr_dump_info(dbc->dump_info);
 				ssr_event_ack = SSR_EVENT_NACK;
 				trace_qaic_ssr(qdev->qddev, "Unexpected AFTER_POWER_UP event received dump downloading still in progress.",
-					       ret);
+					       PTR_ERR(dbc->dump_info));
 				break;
 			}
 
