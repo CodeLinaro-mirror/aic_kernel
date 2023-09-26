@@ -38,6 +38,23 @@
 #define DMA_SGTABLE_ABI_CHECK HEXIFY(149)
 #endif //UTS_UBUNTU_RELEASE_ABI defined
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0) && \
+	LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 0))
+#define from_timer(var, callback_timer, timer_fieldname) \
+	container_of(callback_timer, typeof(*var), timer_fieldname)
+
+#define TIMER_DATA_TYPE unsigned long
+#define TIMER_FUNC_TYPE void (*)(TIMER_DATA_TYPE)
+
+static inline void timer_setup(struct timer_list *timer,
+			       void (*callback)(struct timer_list *),
+			       unsigned int flags)
+{
+	__setup_timer(timer, (TIMER_FUNC_TYPE)callback,
+		      (TIMER_DATA_TYPE)timer, flags);
+}
+#endif
+
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 16, 0))
 #define devm_get_free_pages(dev, flag, idk)	__get_free_page(flag)
 #define devm_free_pages(dev, ptr)		free_page(ptr)
