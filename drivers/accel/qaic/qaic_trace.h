@@ -112,7 +112,7 @@ DECLARE_EVENT_CLASS(qaic_trace2,
 		snprintf(__entry->devname, DEV_NAME_LEN, "%s", trace_qaic_devname(qddev));
 		__assign_str(msg, msg);
 		__entry->ret = ret;
-		__entry->handle = usr->handle;
+		__entry->handle = usr ? usr->handle : -1;
 	),
 	TP_printk("%s: %d: %s %d", __entry->devname, __entry->handle, __get_str(msg), __entry->ret)
 );
