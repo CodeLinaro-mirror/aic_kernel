@@ -7,7 +7,10 @@
 
 #include <generated/utsrelease.h>
 #include <linux/compiler.h>
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0) || \
+		(defined(RHEL_MAJOR) && RHEL_MAJOR == 7 && RHEL_MINOR >= 5))
 #include <linux/sched/mm.h>
+#endif
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0))
 #include <linux/overflow.h>
 #endif
@@ -60,6 +63,12 @@ static inline void timer_setup(struct timer_list *timer,
 #define devm_free_pages(dev, ptr)		free_page(ptr)
 #endif
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0) && \
+		!(defined(RHEL_MAJOR) && \
+			(RHEL_MAJOR == 7) && (RHEL_MINOR >= 5)))
+#define drm_dev_is_unplugged(x) drm_device_is_unplugged(x)
+#endif
+
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 15, 0) && \
 		!(defined(RHEL_MAJOR) && \
 			(RHEL_MAJOR == 7) && (RHEL_MINOR >= 6)))
@@ -76,7 +85,14 @@ static inline void timer_setup(struct timer_list *timer,
 		!(defined(CONFIG_SUSE_VERSION)) && \
 		!(defined(RHEL_MAJOR) && \
 			(RHEL_MAJOR >= 8) && (RHEL_MINOR >= 4)))
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0) && \
+		!(defined (RHEL_MAJOR) && \
+			(RHEL_MAJOR == 7) && (RHEL_MINOR >= 9)))
+#define drm_gem_object_put(x) drm_gem_object_unreference_unlocked(x)
+#define drm_gem_object_get(x) drm_gem_object_reference(x)
+#else
 #define drm_gem_object_put(x) drm_gem_object_put_unlocked(x)
+#endif
 #endif
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0) && \
