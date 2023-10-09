@@ -424,6 +424,7 @@ static inline void *kvmalloc_array(size_t n, size_t size, gfp_t flags)
 #define pci_dbg(pdev, fmt, arg...)     dev_dbg(&(pdev)->dev, fmt, ##arg)
 #define pci_err(pdev, fmt, arg...)     dev_err(&(pdev)->dev, fmt, ##arg)
 #define pci_warn(pdev, fmt, arg...)    dev_warn(&(pdev)->dev, fmt, ##arg)
+#define pci_info(pdev, fmt, arg...)    dev_info(&(pdev)->dev, fmt, ##arg)
 #define pci_printk(level, pdev, fmt, arg...) \
 	dev_printk(level, &(pdev)->dev, fmt, ##arg)
 #endif //kernels without pci_err/dbg/warn defined
