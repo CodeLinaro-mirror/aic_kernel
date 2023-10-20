@@ -918,6 +918,10 @@ static int accel_open(struct inode *inode, struct file *filp)
 	struct drm_minor *minor;
 	int ret;
 
+	/* No DRI features are available, block non ACCEL users */
+	if (imajor(inode) != ACCEL_MAJOR)
+		return -EINVAL;
+
 	minor = accel_minor_acquire(iminor(inode));
 	if (IS_ERR(minor))
 		return PTR_ERR(minor);
