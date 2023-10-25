@@ -6,6 +6,8 @@
 #ifndef _QAIC_ACCEL_HELPERS
 #define _QAIC_ACCEL_HELPERS
 
+#include "backport_flags.h"
+
 #include <drm/drm_auth.h>
 #include <drm/drm_debugfs.h>
 #include <drm/drm_drv.h>
@@ -16,9 +18,7 @@
 #include <drm/drm_vma_manager.h>
 #include <linux/debugfs.h>
 #include <linux/dma-buf.h>
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0) && \
-		!(defined(RHEL_MAJOR) && \
-			(RHEL_MAJOR == 8) && (RHEL_MINOR >=3)))
+#ifdef _QBP_INCLUDE_DRMP
 #include <drm/drmP.h>
 #endif
 #include <linux/module.h>
@@ -26,13 +26,13 @@
 
 #include "qaic.h"
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 2, 0))
+#ifdef _QBP_NEED_DRM_ACCEL_FRAMEWORK
 #define ACCEL_MAJOR		261
 #define ACCEL_MAX_MINORS	256
 
 #define DRIVER_COMPUTE_ACCEL 0
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 5, 0))
+#ifdef _QBP_ALT_DRM_GEM_OBJ_MMAP_FUNC
 #define DRM_ACCEL_FOPS \
 	.open		= accel_open,\
 	.release	= drm_release,\
@@ -52,7 +52,7 @@
 	.read		= drm_read,\
 	.llseek		= noop_llseek, \
 	.mmap		= drm_gem_mmap
-#endif //end 5.5 mmap
+#endif /* end _QBP_ALT_DRM_GEM_OBJ_MMAP_FUNC */
 
 #define DEFINE_DRM_ACCEL_FOPS(name) \
 	static const struct file_operations name = {\
@@ -86,7 +86,7 @@ static void accel_minor_replace(struct drm_minor *minor, int index);
 static void accel_set_device_instance_params(struct device *kdev, int index);
 static int accel_open(struct inode *inode, struct file *filp);
 static void accel_debugfs_init(struct drm_minor *minor, int minor_id);
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 5, 0))
+#ifdef _QBP_ALT_DRM_GEM_OBJ_MMAP_FUNC
 static int accel_gem_mmap(struct file *filp, struct vm_area_struct *vma);
 #endif
 static void drm_prime_remove_buf_handle(struct drm_prime_file_private *prime_fpriv,
@@ -96,19 +96,10 @@ static void drm_gem_release(struct drm_device *dev, struct drm_file *file_privat
 static void drm_prime_init_file_private(struct drm_prime_file_private *prime_fpriv);
 static struct drm_file *drm_file_alloc(struct drm_minor *minor);
 static int drm_open_helper(struct file *filp, struct drm_minor *minor);
-#endif //end _ONLY_DRMM_HELP_
+#endif /* end _ONLY_DRMM_HELP_ */
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0) && \
-		!(defined(CONFIG_SUSE_VERSION) && \
-			CONFIG_SUSE_VERSION == 15 && CONFIG_SUSE_PATCHLEVEL >= 3) && \
-		!(defined(RHEL_MAJOR) && \
-			RHEL_MAJOR == 8 && RHEL_MINOR >= 4))
-#define _QAIC_DRM_MANAGED
-#endif
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 19, 0) && !defined(_QAIC_DRM_MANAGED) && \
-		!(defined(RHEL_MAJOR) && RHEL_MAJOR == 8 && RHEL_MINOR >= 8) && \
-		!(defined(RHEL_MAJOR) && RHEL_MAJOR == 9 && RHEL_MINOR >= 2))
+#ifdef _QBP_NEED_DRM_MANAGED_MUTEX
 #ifndef _ONLY_DRMM_HELP_
 static void drmm_mutex_release(struct drm_device *dev, void *res)
 {
@@ -123,14 +114,10 @@ static int drmm_mutex_init(struct drm_device *dev, struct mutex *lock)
 
 	return drmm_add_action_or_reset(dev, drmm_mutex_release, lock);
 }
-#endif //end _ONLY_DRMM_HELP_
+#endif /* end _ONLY_DRMM_HELP_ */
 #endif
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0) && \
-		!(defined(CONFIG_SUSE_VERSION) && \
-			CONFIG_SUSE_VERSION == 15 && CONFIG_SUSE_PATCHLEVEL >= 3) && \
-		!(defined(RHEL_MAJOR) && \
-			RHEL_MAJOR == 8 && RHEL_MINOR >= 4))
+#ifdef _QBP_ALT_DRM_MANAGED
 typedef void (*drmres_release_t)(struct drm_device *dev, void *res);
 
 struct drmres_node {
@@ -268,10 +255,10 @@ static void qaicm_dev_release(struct drm_device *dev)
 {
 	struct qaic_drm_device *qddev = to_qaic_drm_device(dev);
 
-	qaicm_managed_release(dev); //free all the resources we've alloc'd
-	kfree(qddev->managed.final_kfree); //free drm dev
+	qaicm_managed_release(dev); /* free all the resources we've alloc'd */
+	kfree(qddev->managed.final_kfree); /* free drm dev */
 }
-#endif //end _ONLY_DRMM_HELP_
+#endif /* end _ONLY_DRMM_HELP_ */
 
 static void *qaicm_kmalloc(struct drm_device *dev, size_t size, gfp_t gfp)
 {
@@ -375,26 +362,24 @@ static inline int drmm_mutex_init(struct drm_device *dev, struct mutex *lock)
 #define drmm_add_action(dev, action, data) __qaicm_add_action(dev, action, data, #action)
 #define drmm_add_action_or_reset(dev, action, data) __qaicm_add_action_or_reset(dev, action, data, #action)
 
-#endif /* end QAIC_DRM_MANAGED */
+#endif /* end _QBP_ALT_DRM_MANAGED */
 
 #ifndef _ONLY_DRMM_HELP_
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 5, 0))
+
+#ifdef _QBP_ALT_DRM_GEM_OBJ_MMAP_FUNC
 int qaic_accel_gem_object_mmap(struct drm_gem_object *obj, struct vm_area_struct *vma);
 #endif
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0) && \
-		!(defined(RHEL_MAJOR) && \
-			(RHEL_MAJOR == 8) && (RHEL_MINOR >= 1)))
+
+#ifdef _QBP_ALT_DRM_GEM_OBJ_FUNCS
 void qaic_accel_free_object(struct drm_gem_object *obj);
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16 ,0))
+#ifdef _QBP_HAS_DRM_DRV_GEM_PRINT_INFO
 void qaic_accel_gem_print_info(struct drm_printer *p, unsigned int indent,
 				const struct drm_gem_object *obj);
-#endif /* end >=4.16.0 */
-#endif /* end <5.0.0 */
+#endif /* end _QBP_HAS_DRM_DRV_GEM_PRINT_INFO */
+#endif /* end _QBP_ALT_DRM_GEM_OBJ_FUNCS */
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 5, 0))
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0) && \
-		!(defined(RHEL_MAJOR) && \
-			(RHEL_MAJOR == 8) && (RHEL_MINOR >= 1)))
+#ifdef _QBP_ALT_DRM_GEM_OBJ_MMAP_FUNC
+#ifdef _QBP_ALT_DRM_GEM_OBJ_FUNCS
 static const struct vm_operations_struct qaic_accel_vm_ops = {
 	.open = drm_gem_vm_open,
 	.close = drm_gem_vm_close,
@@ -456,9 +441,7 @@ static int accel_gem_mmap(struct file *filp, struct vm_area_struct *vma)
 	drm_gem_object_get(obj);
 
 	vma->vm_private_data = obj;
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0) && \
-		!(defined(RHEL_MAJOR) && \
-			(RHEL_MAJOR == 8) && (RHEL_MINOR >= 1)))
+#ifdef _QBP_ALT_DRM_GEM_OBJ_FUNCS
 	vma->vm_ops = &qaic_accel_vm_ops;
 #else
 	vma->vm_ops = obj->funcs->vm_ops;
@@ -474,7 +457,7 @@ static int accel_gem_mmap(struct file *filp, struct vm_area_struct *vma)
 	drm_gem_object_put(obj);
 	return ret;
 }
-#endif //end 5.5 mmap
+#endif /* end _QBP_ALT_DRM_GEM_OBJ_MMAP_FUNC */
 
 static void drm_prime_remove_buf_handle(struct drm_prime_file_private *prime_fpriv,
 				 uint32_t handle)
@@ -566,7 +549,7 @@ static int drm_gem_object_release_handle(int id, void *ptr, void *data)
 
 static void drm_gem_open(struct drm_device *dev, struct drm_file *file_private)
 {
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0))
+#ifdef _QBP_NEED_IDR_INIT_BASE
 	idr_init(&file_private->object_idr);
 #else
 	idr_init_base(&file_private->object_idr, 1);
@@ -613,13 +596,10 @@ static struct drm_file *drm_file_alloc(struct drm_minor *minor)
 	init_waitqueue_head(&file->event_wait);
 	file->event_space = 4096; /* set aside 4k for event buffer */
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 67) && \
-		(LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0))) || \
-		(LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 6))
+#ifdef _QBP_HAS_DRM_FILE_LOOKUP_LOCK
 	spin_lock_init(&file->master_lookup_lock);
 #endif
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0)) || \
-	(defined(RHEL_MAJOR) && (RHEL_MAJOR == 7) && (RHEL_MINOR >= 3))
+#ifdef _QBP_NEED_DRM_FILE_EVENT_INFO_LOCK
 	mutex_init(&file->event_read_lock);
 #endif
 
@@ -650,11 +630,10 @@ static int drm_open_helper(struct file *filp, struct drm_minor *minor)
 {
 	struct drm_device *dev = minor->dev;
 	struct drm_file *priv;
-	//int ret;
 
 	if (filp->f_flags & O_EXCL)
 		return -EBUSY;
-	//There was a check here for SPARC cpu
+	/* There was a check here for SPARC cpu */
 	if (dev->switch_power_state != DRM_SWITCH_POWER_ON &&
 	    dev->switch_power_state != DRM_SWITCH_POWER_DYNAMIC_OFF)
 		return -EINVAL;
@@ -858,11 +837,7 @@ static void accel_minor_alloc_release(struct drm_device *dev, void *data)
 	accel_minor_remove(minor->index);
 }
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0) || \
-		(defined(CONFIG_SUSE_VERSION) && \
-			CONFIG_SUSE_VERSION == 15 && CONFIG_SUSE_PATCHLEVEL >= 3) || \
-		(defined(RHEL_MAJOR) && \
-			RHEL_MAJOR == 8 && RHEL_MINOR >= 4))
+#ifdef _QBP_ALT_DRM_MANAGED
 static void accel_minor_device_release(unsigned int minor_id) {}
 #else
 static void accel_minor_device_release(unsigned int minor_id)
@@ -927,11 +902,7 @@ static int accel_open(struct inode *inode, struct file *filp)
 		return PTR_ERR(minor);
 
 	dev = minor->dev;
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 7, 0) && \
-		!(defined(CONFIG_SUSE_VERSION) && \
-			CONFIG_SUSE_VERSION == 15 && CONFIG_SUSE_PATCHLEVEL >= 3) && \
-		!(defined(RHEL_MAJOR) && \
-			RHEL_MAJOR == 8 && RHEL_MINOR >= 4))
+#ifdef _QBP_NEED_DRM_DEV_ATOMIC_OPEN_COUNT
 	dev->open_count++;
 #else
 	atomic_fetch_inc(&dev->open_count);
@@ -945,11 +916,7 @@ static int accel_open(struct inode *inode, struct file *filp)
 	return 0;
 
 err_undo:
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 7, 0) && \
-		!(defined(CONFIG_SUSE_VERSION) && \
-			CONFIG_SUSE_VERSION == 15 && CONFIG_SUSE_PATCHLEVEL >= 3) && \
-		!(defined(RHEL_MAJOR) && \
-			RHEL_MAJOR == 8 && RHEL_MINOR >= 4))
+#ifdef _QBP_NEED_DRM_DEV_ATOMIC_OPEN_COUNT
 	dev->open_count--;
 #else
 	atomic_dec(&dev->open_count);
@@ -1008,11 +975,7 @@ static void qaic_accel_cleanup(struct qaic_device *qdev)
 	qaic_drm_accel_free(qdev->qddev);
 }
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0) && \
-		!(defined(CONFIG_SUSE_VERSION) && \
-			CONFIG_SUSE_VERSION == 15 && CONFIG_SUSE_PATCHLEVEL >= 3) && \
-		!(defined(RHEL_MAJOR) && \
-			RHEL_MAJOR == 8 && RHEL_MINOR >= 4))
+#ifdef _QBP_ALT_DRM_MANAGED
 static void devm_qaic_dev_init_release(void *data)
 {
 	drm_dev_put(data);
@@ -1020,8 +983,7 @@ static void devm_qaic_dev_init_release(void *data)
 
 static void qaicm_drm_dev_init_release(struct drm_device *dev, void *res)
 {
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0) || \
-		(defined(RHEL_MAJOR) && RHEL_MAJOR == 7 && RHEL_MINOR >= 5))
+#ifndef _QBP_ALT_DRM_MANAGED_NO_RELEASE
 	/* on very old kernels that don't support .release, we'll let them free their struct */
 	drm_dev_fini(dev);
 #else
@@ -1167,7 +1129,7 @@ static void accel_exit(void)
 	accel_sysfs_destroy();
 	idr_destroy(&accel_minors_idr);
 }
-#endif //end _ONLY_DRMM_HELP_
-#endif //end LINUX_VERSION_CODE < 6.2.0
+#endif /* end _ONLY_DRMM_HELP_ */
+#endif /* end _QBP_NEED_DRM_ACCEL_FRAMEWORK */
 
-#endif //end _QAIC_ACCEL_HELPERS
+#endif /* end _QAIC_ACCEL_HELPERS */

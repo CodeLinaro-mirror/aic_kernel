@@ -3,6 +3,8 @@
 /* Copyright (c) 2020-2021, The Linux Foundation. All rights reserved. */
 /* Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved. */
 
+#include "backport_flags.h"
+
 #include <asm/byteorder.h>
 #include <drm/drm_file.h>
 #include <linux/devcoredump.h>

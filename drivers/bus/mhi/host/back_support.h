@@ -4,32 +4,13 @@
 
 #ifndef MHI_BACKSUPPORT_H_
 #define MHI_BACKSUPPORT_H_
+#include "../backport_flags.h"
 
-#include <linux/version.h>
-#include <generated/utsrelease.h>
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)) && \
-	!(defined(CONFIG_SUSE_VERSION) && \
-		CONFIG_SUSE_VERSION == 15 && CONFIG_SUSE_PATCHLEVEL >= 3) && \
-	!(defined(RHEL_MAJOR) && (RHEL_MAJOR == 8) && (RHEL_MINOR >= 4))
+#ifdef _QBP_NEED_FSLEEP
 #include <linux/delay.h>
-#endif //LINUX_VERSION_CODE < 5.8.0 && SUSE_VERSION<15.3 && RHEL_VERSION < 8.4
+#endif
 
-/*
- * UTS_UBUNTU_RELEASE_ABI can be an invalid octal number, we can't force it to
- * be read as a decimal, but we can force it to be hexidecimal. It doesn't stop
- * there, the C preprocessor doesn't like concatenating integers, so a helper
- * macro is needed.
- */
-#ifdef UTS_UBUNTU_RELEASE_ABI
-#ifndef UBUNTU_ABI
-#define CONCAT_HLP(x, y) x##y
-#define HEXIFY(z) CONCAT_HLP(0x, z)
-#define UBUNTU_ABI HEXIFY(UTS_UBUNTU_RELEASE_ABI)
-#endif //UBUNTU_ABI defined
-#define SYSFS_ABI_CHECK HEXIFY(139)
-#endif //UTS_UBUNTU_RELEASE_ABI defined
-
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0))
+#ifdef _QBP_REDEF_IDA_FREE
 #define ida_free(ida, id) ida_simple_remove((ida), (id))
 /*
  * ida_simple_get's 'end' value is exclusive, so this isn't exactly the same
@@ -40,21 +21,7 @@
 #define ida_alloc(ida,gfp) ida_simple_get(ida, 0, 0 , gfp)
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)  && \
-	(LINUX_VERSION_CODE < KERNEL_VERSION(4, 9, 260) || \
-		LINUX_VERSION_CODE >= KERNEL_VERSION(4, 10, 0)) && \
-	(LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 224) || \
-		LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)) && \
-	(LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 179) || \
-		LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)) && \
-	(LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 103) || \
-		LINUX_VERSION_CODE >= KERNEL_VERSION(5, 5, 0)) && \
-	!(defined(CONFIG_SUSE_VERSION) && \
-		CONFIG_SUSE_VERSION == 15 && CONFIG_SUSE_PATCHLEVEL >= 3) &&\
-	!(defined(RHEL_MAJOR) && (RHEL_MAJOR == 8 && (RHEL_MINOR >= 5))) && \
-	!(defined(UBUNTU_ABI) && UBUNTU_ABI >= SYSFS_ABI_CHECK && \
-		LINUX_VERSION_CODE <= KERNEL_VERSION(4, 15, 18) && \
-		LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0))
+#ifdef _QBP_NEED_SYSFS_EMIT
 static inline int sysfs_emit(char *buf, const char *fmt, ...)
 {
 	va_list args;
@@ -86,15 +53,9 @@ static inline int sysfs_emit_at(char *buf, int at, const char *fmt, ...)
 
 	return len;
 }
-#endif /*
-	* LINUX_VERSION_CODE < 5.10 && (<5.4.103 || >5.4.214) &&
-	*			RHEL < 8.5 && < Ubuntu18.04-4.15.0-139
-	*/
+#endif /* end _QBP_NEED_SYSFS_EMIT */
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)) && \
-	!(defined(CONFIG_SUSE_VERSION) && \
-		CONFIG_SUSE_VERSION == 15 && CONFIG_SUSE_PATCHLEVEL >= 3) && \
-	!(defined(RHEL_MAJOR) && (RHEL_MAJOR == 8) && (RHEL_MINOR >= 4))
+#ifdef _QBP_NEED_FSLEEP
 static inline void fsleep(unsigned long usecs)
 {
 	if (usecs <= 10)
@@ -104,10 +65,9 @@ static inline void fsleep(unsigned long usecs)
 	else
 		msleep(DIV_ROUND_UP(usecs, 1000));
 }
-#endif //LINUX_VERSION_CODE < 5.8.0 && SUSE_VERSION<15.3 && RHEL_VERSION < 8.4
+#endif /* end _QBP_NEED_FSLEEP */
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 9, 0) && \
-		!(defined(RHEL_MAJOR) && (RHEL_MAJOR == 7) && (RHEL_MINOR >= 9)))
+#ifdef _QBP_NEED_BIT_FIELD_PREPGET
 #define BUILD_BUG_ON_MSG(cond, msg) compiletime_assert(!(cond), msg)
 
 #define __BUILD_BUG_ON_NOT_POWER_OF_2(n)        \
@@ -138,6 +98,6 @@ static inline void fsleep(unsigned long usecs)
 	 __BF_FIELD_CHECK(_mask, _reg, 0U, "FIELD_GET: ");		\
 	 (typeof(_mask))(((_reg) & (_mask)) >> __bf_shf(_mask));	\
 	})
-#endif //LINUX_VERSION_CODE < 4.9.0
+#endif /* end _QBP_NEED_BIT_FIELD_PREPGET */
 
 #endif //MHI_BACKSUPPORT_H_

@@ -6,6 +6,7 @@
 
 #if !defined(_QAIC_TRACE_H_) || defined(TRACE_HEADER_MULTI_READ)
 #define _QAIC_TRACE_H_
+#include "backport_flags.h"
 
 #include <drm/drm_file.h>
 #include <linux/stringify.h>
