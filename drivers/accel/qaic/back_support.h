@@ -5,8 +5,6 @@
 #ifndef _QAIC_BACKSUPPORT_H_
 #define _QAIC_BACKSUPPORT_H_
 
-#include "backport_flags.h"
-
 #include <linux/compiler.h>
 #ifdef _QBP_INCLUDE_SCHED_MM
 #include <linux/sched/mm.h>

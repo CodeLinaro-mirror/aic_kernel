@@ -6,8 +6,6 @@
 #ifndef _QAIC_ACCEL_HELPERS
 #define _QAIC_ACCEL_HELPERS
 
-#include "backport_flags.h"
-
 #include <drm/drm_auth.h>
 #include <drm/drm_debugfs.h>
 #include <drm/drm_drv.h>

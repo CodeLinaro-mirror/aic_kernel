@@ -6,7 +6,6 @@
 
 #ifndef _QAIC_H_
 #define _QAIC_H_
-#include "backport_flags.h"
 
 #include <drm/drm_debugfs.h>
 #include <linux/interrupt.h>

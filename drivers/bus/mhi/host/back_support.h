@@ -4,7 +4,6 @@
 
 #ifndef MHI_BACKSUPPORT_H_
 #define MHI_BACKSUPPORT_H_
-#include "../backport_flags.h"
 
 #ifdef _QBP_NEED_FSLEEP
 #include <linux/delay.h>

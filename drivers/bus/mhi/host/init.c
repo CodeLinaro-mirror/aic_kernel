@@ -3,7 +3,6 @@
  * Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
  *
  */
-#include "../backport_flags.h"
 
 #include <linux/bitfield.h>
 #include <linux/debugfs.h>
