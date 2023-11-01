@@ -1020,7 +1020,13 @@ static void devm_qaic_dev_init_release(void *data)
 
 static void qaicm_drm_dev_init_release(struct drm_device *dev, void *res)
 {
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0) || \
+		(defined(RHEL_MAJOR) && RHEL_MAJOR == 7 && RHEL_MINOR >= 5))
+	/* on very old kernels that don't support .release, we'll let them free their struct */
 	drm_dev_fini(dev);
+#else
+	drm_dev_put(dev);
+#endif
 }
 
 static struct qaic_drm_device *qaic_accel_drm_dev_alloc(const struct drm_driver *driver,
