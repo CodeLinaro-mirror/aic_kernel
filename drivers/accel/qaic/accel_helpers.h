@@ -248,7 +248,7 @@ static void qaicm_managed_release(struct drm_device *dev)
 		free_dr(dr);
 	}
 }
-
+#ifndef _QBP_ALT_DRM_MANAGED_NO_RELEASE
 static void qaicm_dev_release(struct drm_device *dev)
 {
 	struct qaic_drm_device *qddev = to_qaic_drm_device(dev);
@@ -256,6 +256,7 @@ static void qaicm_dev_release(struct drm_device *dev)
 	qaicm_managed_release(dev); /* free all the resources we've alloc'd */
 	kfree(qddev->managed.final_kfree); /* free drm dev */
 }
+#endif /* _QBP_ALT_DRM_MANAGED_NO_RELEASE */
 #endif /* end _ONLY_DRMM_HELP_ */
 
 static void *qaicm_kmalloc(struct drm_device *dev, size_t size, gfp_t gfp)
