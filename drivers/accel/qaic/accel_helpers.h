@@ -990,8 +990,13 @@ static void qaicm_drm_dev_init_release(struct drm_device *dev, void *res)
 #endif
 }
 
+#ifdef _QBP_HAS_CONST_DRM_DRIVER
 static struct qaic_drm_device *qaic_accel_drm_dev_alloc(const struct drm_driver *driver,
 							struct device *parent) {
+#else
+static struct qaic_drm_device *qaic_accel_drm_dev_alloc(struct drm_driver *driver,
+							struct device *parent) {
+#endif
 	struct qaic_drm_device *qddev;
 	int ret;
 
