@@ -553,6 +553,7 @@ static int dbg_xfer_info_rsp(struct qaic_device *qdev, struct dma_bridge_chan *d
 		ret = -EINVAL;
 		trace_qaic_ssr_2(qdev->qddev, "Invalid DBC state(%llu) for debug transfer. Expected %llu.",
 				 dbc->state, DBC_STATE_BEFORE_POWER_UP);
+		dump_info = NULL;
 		goto send_rsp;
 	}
 
