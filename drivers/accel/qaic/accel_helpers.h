@@ -369,6 +369,10 @@ static inline int drmm_mutex_init(struct drm_device *dev, struct mutex *lock)
 int qaic_accel_gem_object_mmap(struct drm_gem_object *obj, struct vm_area_struct *vma);
 #endif
 
+#ifdef _QBP_HAS_GEM_PRIME_GET_SG_TABLE
+struct sg_table *qaic_get_sg_table(struct drm_gem_object *obj);
+#endif
+
 #ifdef _QBP_ALT_DRM_GEM_OBJ_FUNCS
 void qaic_accel_free_object(struct drm_gem_object *obj);
 #ifdef _QBP_HAS_DRM_DRV_GEM_PRINT_INFO
@@ -457,6 +461,37 @@ static int accel_gem_mmap(struct file *filp, struct vm_area_struct *vma)
 	return ret;
 }
 #endif /* end _QBP_ALT_DRM_GEM_OBJ_MMAP_FUNC */
+
+#ifndef _QBP_HAS_DRM_GEM_PRIME_MMAP_FUNC
+int drm_gem_prime_mmap(struct drm_gem_object *obj, struct vm_area_struct *vma);
+
+int drm_gem_prime_mmap(struct drm_gem_object *obj, struct vm_area_struct *vma)
+{
+	int ret;
+
+	/* Add the fake offset */
+	vma->vm_pgoff += drm_vma_node_start(&obj->vma_node);
+#ifdef _QBP_ALT_DRM_GEM_OBJ_FUNCS
+	vma->vm_ops = &qaic_accel_vm_ops;
+#else
+	vma->vm_ops = obj->funcs->vm_ops;
+#endif
+
+	drm_gem_object_get(obj);
+#ifdef _QBP_ALT_DRM_GEM_OBJ_MMAP_FUNC
+	ret = qaic_accel_gem_object_mmap(obj, vma);
+#else
+	ret = obj->funcs->mmap(obj, vma);
+#endif
+	if (ret) {
+		drm_gem_object_put(obj);
+		return ret;
+	}
+	vma->vm_private_data = obj;
+
+	return 0;
+}
+#endif /* end _QBP_HAS_DRM_GEM_PRIME_MMAP_FUNC */
 
 static void drm_prime_remove_buf_handle(struct drm_prime_file_private *prime_fpriv,
 				 uint32_t handle)
