@@ -656,7 +656,11 @@ static int qaic_drm_open_helper(struct file *filp, struct drm_minor *minor)
 	return 0;
 }
 
+#ifdef _QBP_HAS_CONST_CLASS_DEVNODE
+static char *accel_devnode(const struct device *dev, umode_t *mode)
+#else
 static char *accel_devnode(struct device *dev, umode_t *mode)
+#endif
 {
 	return kasprintf(GFP_KERNEL, "accel/%s", dev_name(dev));
 }
