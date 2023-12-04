@@ -99,4 +99,8 @@ static inline void fsleep(unsigned long usecs)
 	})
 #endif /* end _QBP_NEED_BIT_FIELD_PREPGET */
 
+#ifdef _QBP_NEED_VCALLOC
+#define vcalloc(n, size) vzalloc((n) * (size))
+#endif /* end _QBP_NEED_VCALLOC */
+
 #endif //MHI_BACKSUPPORT_H_
