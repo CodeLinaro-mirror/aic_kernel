@@ -840,25 +840,6 @@ static void accel_minor_alloc_release(struct drm_device *dev, void *data)
 	accel_minor_remove(minor->index);
 }
 
-#ifdef _QBP_ALT_DRM_MANAGED
-static void accel_minor_device_release(unsigned int minor_id) {}
-#else
-static void accel_minor_device_release(unsigned int minor_id)
-{
-	struct drm_minor *minor;
-	unsigned long flags;
-
-	spin_lock_irqsave(&accel_minor_lock, flags);
-	minor = idr_find(&accel_minors_idr, minor_id);
-	spin_unlock_irqrestore(&accel_minor_lock, flags);
-
-	if (!minor)
-		return;
-
-	accel_minor_alloc_release(minor->dev, minor);
-}
-#endif
-
 static struct drm_minor *accel_minor_acquire(unsigned int minor_id)
 {
 	struct drm_minor *minor;
@@ -961,22 +942,6 @@ static const struct file_operations accel_stub_fops = {
 	.open = accel_stub_open,
 	.llseek = noop_llseek,
 };
-
-static void qaic_drm_accel_free(struct qaic_drm_device *qddev)
-{
-	if (!qddev->accel)
-		return;
-
-	accel_minor_device_release(qddev->accel->index);
-	qddev->accel = NULL;
-}
-
-static void qaic_accel_cleanup(struct qaic_device *qdev)
-{
-	if (!qdev->qddev)
-		return;
-	qaic_drm_accel_free(qdev->qddev);
-}
 
 #ifdef _QBP_ALT_DRM_MANAGED
 static void devm_qaic_dev_init_release(void *data)
