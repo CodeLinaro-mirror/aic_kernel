@@ -93,7 +93,7 @@ static void drm_gem_open(struct drm_device *dev, struct drm_file *file_private);
 static void drm_gem_release(struct drm_device *dev, struct drm_file *file_private);
 static void drm_prime_init_file_private(struct drm_prime_file_private *prime_fpriv);
 static struct drm_file *drm_file_alloc(struct drm_minor *minor);
-static int drm_open_helper(struct file *filp, struct drm_minor *minor);
+static int qaic_drm_open_helper(struct file *filp, struct drm_minor *minor);
 #endif /* end _ONLY_DRMM_HELP_ */
 
 
@@ -625,7 +625,7 @@ out_prime_destroy:
 	return ERR_PTR(ret);
 }
 
-static int drm_open_helper(struct file *filp, struct drm_minor *minor)
+static int qaic_drm_open_helper(struct file *filp, struct drm_minor *minor)
 {
 	struct drm_device *dev = minor->dev;
 	struct drm_file *priv;
@@ -909,7 +909,7 @@ static int accel_open(struct inode *inode, struct file *filp)
 
 	filp->f_mapping = dev->anon_inode->i_mapping;
 
-	ret = drm_open_helper(filp, minor);
+	ret = qaic_drm_open_helper(filp, minor);
 	if (ret)
 		goto err_undo;
 	return 0;
