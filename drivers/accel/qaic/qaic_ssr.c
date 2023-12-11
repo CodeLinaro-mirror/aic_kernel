@@ -5,6 +5,7 @@
 
 #include <asm/byteorder.h>
 #include <drm/drm_file.h>
+#include <drm/drm_managed.h>
 #include <linux/devcoredump.h>
 #include <linux/device.h>
 #include <linux/kernel.h>
@@ -16,7 +17,9 @@
 #include "qaic_trace.h"
 
 #define MSG_BUF_SZ 32
-#define READ_RSP_BUF_PAGE_ORDER 2
+#define SSR_MHI_BUF_SIZE SZ_64K
+#define SSR_MEM_READ_DATA_SIZE ((u64)SSR_MHI_BUF_SIZE - sizeof(struct ssr_crashdump))
+#define SSR_MEM_READ_CHUNK_SIZE ((u64)SSR_MEM_READ_DATA_SIZE - sizeof(struct ssr_memory_read_rsp))
 #define to_qddev(dump_info) ((dump_info)->dbc->qdev->qddev)
 
 enum ssr_cmds {
@@ -130,12 +133,6 @@ struct ssr_dump_info {
 	struct ssr_memory_read *read_buf_req;
 	/* TRUE: ->read_buf_req is queued for MHI transaction. FALSE: Otherwise */
 	bool read_buf_req_queued;
-	/* Buffer recevied in response to MEMORY READ request */
-	struct ssr_resp *read_buf_rsp;
-	/* Size of the buffer queued in for MHI transfer */
-	u64 read_buf_rsp_sz;
-	/* TRUE: ->read_buf_rsp is queued for MHI transaction. FALSE: Otherwise */
-	bool read_buf_rsp_queued;
 	/* Address of table in host */
 	void *tbl_addr;
 	/* Total size of table */
@@ -150,15 +147,25 @@ struct ssr_dump_info {
 	u64 dump_sz;
 	/* Offset of crashdump(->dump_addr) where the new chunk will be dumped */
 	u64 dump_off;
-	/*
-	 * Crashdump will be collected chunk by chunk and this is max size of
-	 * one chunk
-	 */
-	u64 chunk_sz;
 	/* Points to the table entry we are currently downloading */
 	struct debug_info_table *tbl_ent;
 	/* Offset in the current table entry(->tbl_ent) for next chuck */
 	u64 tbl_ent_off;
+};
+
+struct ssr_crashdump {
+	/*
+	 * Points to a book keeping struct maintained by MHI SSR device while
+	 * downloading a SSR crashdump. It is NULL when crashdump downloading
+	 * not in progress.
+	 */
+	struct ssr_dump_info *dump_info;
+	/* Work struct to schedule work coming on QAIC_SSR channel */
+	struct work_struct work;
+	/* Root struct of device, used to access device resources */
+	struct qaic_device *qdev;
+	/* Buffer used by MHI for transfer requests */
+	u8 data[];
 };
 
 struct dump_file_meta {
@@ -187,24 +194,29 @@ struct dump_file_meta {
  *              +------------------------------------------+
  */
 
-static void free_ssr_dump_info(struct ssr_dump_info *dump_info)
+static void free_ssr_dump_info(struct ssr_crashdump *ssr_crash)
 {
+	struct ssr_dump_info *dump_info = ssr_crash->dump_info;
+
+	ssr_crash->dump_info = NULL;
 	if (!dump_info)
 		return;
 	if (!dump_info->read_buf_req_queued)
 		kfree(dump_info->read_buf_req);
-	if (!dump_info->read_buf_rsp_queued)
-		kfree(dump_info->read_buf_rsp);
 	vfree(dump_info->tbl_addr);
 	vfree(dump_info->dump_addr);
-	dump_info->dbc->dump_info = NULL;
 	kfree(dump_info);
 }
 
-void clean_up_ssr(struct qaic_device *qdev, u32 dbc_id)
+void clean_up_ssr(struct qaic_device *qdev)
 {
-	dbc_exit_ssr(qdev, dbc_id);
-	free_ssr_dump_info(qdev->dbc[dbc_id].dump_info);
+	struct ssr_crashdump *ssr_crash = qdev->ssr_mhi_buf;
+
+	if (!ssr_crash)
+		return;
+
+	dbc_exit_ssr(qdev);
+	free_ssr_dump_info(ssr_crash);
 }
 
 static int alloc_dump(struct ssr_dump_info *dump_info)
@@ -284,27 +296,25 @@ out:
 	return ret;
 }
 
-static int mem_read_req(struct qaic_device *qdev, struct ssr_dump_info *dump_info, u64 dest_addr,
-		        u64 dest_len)
+static int mem_read_req(struct qaic_device *qdev, u64 dest_addr, u64 dest_len)
 {
-	struct ssr_memory_read *read_buf_req = dump_info->read_buf_req;
-	u32 dbc_id = dump_info->dbc->id;
+	struct ssr_crashdump *ssr_crash = qdev->ssr_mhi_buf;
+	struct ssr_memory_read *read_buf_req;
+	struct ssr_dump_info *dump_info;
 	int ret;
 
-	ret = mhi_queue_buf(qdev->ssr_ch, DMA_FROM_DEVICE, dump_info->read_buf_rsp->data,
-			    dump_info->read_buf_rsp_sz, MHI_EOT);
+	dump_info = ssr_crash->dump_info;
+	ret = mhi_queue_buf(qdev->ssr_ch, DMA_FROM_DEVICE, ssr_crash->data, SSR_MEM_READ_DATA_SIZE,
+			    MHI_EOT);
 	if (ret) {
 		trace_qaic_ssr(qdev->qddev, "MHI failed to queue read resp buffer.", ret);
 		goto out;
 	}
-	else {
-		dump_info->read_buf_rsp_queued = true;
-	}
 
-
+	read_buf_req = dump_info->read_buf_req;
 	read_buf_req->hdr.cmd = cpu_to_le32(MEMORY_READ);
 	read_buf_req->hdr.len = cpu_to_le32(sizeof(*read_buf_req));
-	read_buf_req->hdr.dbc_id = cpu_to_le32(dbc_id);
+	read_buf_req->hdr.dbc_id = cpu_to_le32(qdev->ssr_dbc);
 	read_buf_req->addr = cpu_to_le64(dest_addr);
 	read_buf_req->len = cpu_to_le64(dest_len);
 
@@ -374,6 +384,7 @@ static void ssr_dump_worker(struct work_struct *work)
 	struct ssr_memory_read_rsp *mem_rd_resp;
 	struct debug_info_table *tbl_ent;
 	struct ssr_dump_info *dump_info;
+	struct ssr_crashdump *ssr_crash;
 	u64 dest_addr, dest_len;
 	struct _ssr_hdr *_hdr;
 	struct ssr_hdr hdr;
@@ -386,19 +397,18 @@ static void ssr_dump_worker(struct work_struct *work)
 	hdr.len = le32_to_cpu(_hdr->len);
 	hdr.dbc_id = le32_to_cpu(_hdr->dbc_id);
 
-	if (hdr.dbc_id >= qdev->num_dbc) {
-		trace_qaic_ssr_1(qdev->qddev, "Invalid dbc_id=%llu.", hdr.dbc_id);
+	if (hdr.dbc_id != qdev->ssr_dbc) {
+		trace_qaic_ssr_2(qdev->qddev, "Invalid dbc_id=%llu. Expected dbc_id=%llu",
+				 hdr.dbc_id, qdev->ssr_dbc);
 		goto reset_device;
 	}
 
-	dump_info = qdev->dbc[hdr.dbc_id].dump_info;
-
+	ssr_crash = qdev->ssr_mhi_buf;
+	dump_info = ssr_crash->dump_info;
 	if (!dump_info) {
 		trace_qaic_ssr(qdev->qddev, "Invalid state device not in reset.", -EINVAL);
 		goto reset_device;
 	}
-
-	dump_info->read_buf_rsp_queued = false;
 
 	if (hdr.cmd != MEMORY_READ_RSP) {
 		trace_qaic_ssr_2(qdev->qddev, "Invalid cmd=%llu. Expected MEMORY_READ_RSP(%llu).",
@@ -406,9 +416,9 @@ static void ssr_dump_worker(struct work_struct *work)
 		goto free_dump_info;
 	}
 
-	if (hdr.len > dump_info->read_buf_rsp_sz) {
+	if (hdr.len > SSR_MEM_READ_DATA_SIZE) {
 		trace_qaic_ssr_2(qdev->qddev, "Invalid memory read resp len=%llu it cannot exceed %llu.",
-				 hdr.cmd, dump_info->read_buf_rsp_sz);
+				 hdr.cmd, SSR_MEM_READ_DATA_SIZE);
 		goto free_dump_info;
 	}
 
@@ -427,14 +437,14 @@ static void ssr_dump_worker(struct work_struct *work)
 	if (dump_info->tbl_off < dump_info->tbl_len) {
 		/* Continue downloading table */
 		dest_addr = dump_info->tbl_addr_dev + dump_info->tbl_off;
-		dest_len = min(dump_info->chunk_sz, dump_info->tbl_len - dump_info->tbl_off);
-		ret = mem_read_req(qdev, dump_info, dest_addr, dest_len);
+		dest_len = min(SSR_MEM_READ_CHUNK_SIZE, dump_info->tbl_len - dump_info->tbl_off);
+		ret = mem_read_req(qdev, dest_addr, dest_len);
 	} else if (dump_info->dump_off < dump_info->dump_sz) {
 		/* Continue downloading crashdump */
 		tbl_ent = dump_info->tbl_ent;
 		dest_addr = tbl_ent->mem_base + dump_info->tbl_ent_off;
-		dest_len = min(dump_info->chunk_sz, tbl_ent->len - dump_info->tbl_ent_off);
-		ret = mem_read_req(qdev, dump_info, dest_addr, dest_len);
+		dest_len = min(SSR_MEM_READ_CHUNK_SIZE, tbl_ent->len - dump_info->tbl_ent_off);
+		ret = mem_read_req(qdev, dest_addr, dest_len);
 	} else {
 		/* Crashdump download complete */
 		ret = send_xfer_done(qdev, dump_info->resp->data, hdr.dbc_id);
@@ -449,7 +459,7 @@ static void ssr_dump_worker(struct work_struct *work)
 
 free_dump_info:
 	/* Free the allocated memory */
-	free_ssr_dump_info(dump_info);
+	free_ssr_dump_info(ssr_crash);
 reset_device:
 	/*
 	 * After subsystem crashes in device crashdump collection begins but
@@ -464,7 +474,6 @@ static struct ssr_dump_info *alloc_dump_info(struct qaic_device *qdev,
 					     struct ssr_debug_transfer_info *debug_info)
 {
 	struct ssr_dump_info *dump_info;
-	unsigned int read_rsp_sz;
 	int ret;
 
 	le64_to_cpus(&debug_info->tbl_len);
@@ -485,26 +494,12 @@ static struct ssr_dump_info *alloc_dump_info(struct qaic_device *qdev,
 		goto out;
 	}
 
-	/* Buffer used to receive MEMORY READ response from device via MHI */
-	read_rsp_sz = PAGE_SIZE << READ_RSP_BUF_PAGE_ORDER;
-	while (read_rsp_sz > 0) {
-		dump_info->read_buf_rsp = kzalloc(read_rsp_sz, GFP_KERNEL | __GFP_NOWARN);
-		if (dump_info->read_buf_rsp)
-			break;
-		read_rsp_sz >>= 1;
-	}
-	if (!dump_info->read_buf_rsp) {
-		ret = -ENOMEM;
-		trace_qaic_ssr(qdev->qddev, "Failed to allocate memory read resp buffer.", ret);
-		goto free_dump_info;
-	}
-
 	/* Buffer used to send MEMORY READ request to device via MHI */
 	dump_info->read_buf_req = kzalloc(sizeof(*dump_info->read_buf_req), GFP_KERNEL);
 	if (!dump_info->read_buf_req) {
 		ret = -ENOMEM;
 		trace_qaic_ssr(qdev->qddev, "Failed to allocate memory read req buffer.", ret);
-		goto free_read_buf_rsp;
+		goto free_dump_info;
 	}
 
 	/* Crashdump meta table buffer */
@@ -515,19 +510,13 @@ static struct ssr_dump_info *alloc_dump_info(struct qaic_device *qdev,
 		goto free_read_buf_req;
 	}
 
-	INIT_WORK(&dump_info->read_buf_rsp->work, ssr_dump_worker);
-	dump_info->read_buf_rsp->qdev = qdev;
 	dump_info->tbl_addr_dev = debug_info->tbl_addr;
 	dump_info->tbl_len = debug_info->tbl_len;
-	dump_info->read_buf_rsp_sz = read_rsp_sz - sizeof(*dump_info->read_buf_rsp);
-	dump_info->chunk_sz = dump_info->read_buf_rsp_sz - sizeof(struct ssr_memory_read_rsp);
 
 	return dump_info;
 
 free_read_buf_req:
 	kfree(dump_info->read_buf_req);
-free_read_buf_rsp:
-	kfree(dump_info->read_buf_rsp);
 free_dump_info:
 	kfree(dump_info);
 out:
@@ -535,12 +524,11 @@ out:
 }
 
 static int dbg_xfer_info_rsp(struct qaic_device *qdev, struct dma_bridge_chan *dbc,
-			     struct ssr_debug_transfer_info *debug_info,
-			     struct ssr_dump_info **dump_info_out)
+			     struct ssr_debug_transfer_info *debug_info)
 {
 
 	struct ssr_debug_transfer_info_rsp *debug_rsp;
-	struct ssr_dump_info *dump_info;
+	struct ssr_crashdump *ssr_crash = NULL;
 	int ret = 0, ret2;
 
 	debug_rsp = kmalloc(sizeof(*debug_rsp), GFP_KERNEL);
@@ -549,18 +537,24 @@ static int dbg_xfer_info_rsp(struct qaic_device *qdev, struct dma_bridge_chan *d
 		return -ENOMEM;
 	}
 
+	if (!qdev->ssr_mhi_buf) {
+		ret = -ENOMEM;
+		trace_qaic_ssr(qdev->qddev, "Not enough memory to collect crashdump.", ret);
+		goto send_rsp;
+	}
+
 	if (dbc->state != DBC_STATE_BEFORE_POWER_UP) {
 		ret = -EINVAL;
 		trace_qaic_ssr_2(qdev->qddev, "Invalid DBC state(%llu) for debug transfer. Expected %llu.",
 				 dbc->state, DBC_STATE_BEFORE_POWER_UP);
-		dump_info = NULL;
 		goto send_rsp;
 	}
 
-	dump_info = alloc_dump_info(qdev, debug_info);
-	if (IS_ERR(dump_info)) {
-		ret = PTR_ERR(dump_info);
-		dump_info = NULL;
+	ssr_crash = qdev->ssr_mhi_buf;
+	ssr_crash->dump_info = alloc_dump_info(qdev, debug_info);
+	if (IS_ERR(ssr_crash->dump_info)) {
+		ret = PTR_ERR(ssr_crash->dump_info);
+		ssr_crash->dump_info = NULL;
 		trace_qaic_ssr(qdev->qddev, "Failed alloc_dump_info().", ret);
 	}
 
@@ -576,13 +570,11 @@ send_rsp:
 
 	ret2 = mhi_queue_buf(qdev->ssr_ch, DMA_TO_DEVICE, debug_rsp, sizeof(*debug_rsp), MHI_EOT);
 	if (ret2) {
-		free_ssr_dump_info(dump_info);
+		free_ssr_dump_info(ssr_crash);
 		kfree(debug_rsp);
 		trace_qaic_ssr(qdev->qddev, "MHI failed to send debug rsp.", ret2);
 		return ret2;
 	}
-
-	*dump_info_out = dump_info;
 
 	return ret;
 }
@@ -590,17 +582,19 @@ send_rsp:
 static void dbg_xfer_done_rsp(struct qaic_device *qdev, struct dma_bridge_chan *dbc,
 			      struct ssr_debug_transfer_done_rsp *xfer_rsp)
 {
-	struct ssr_dump_info *dump_info = dbc->dump_info;
+	struct ssr_crashdump *ssr_crash = qdev->ssr_mhi_buf;
 	u32 status = le32_to_cpu(xfer_rsp->ret);
 	struct device *dev = &qdev->pdev->dev;
+	struct ssr_dump_info *dump_info;
 
+	dump_info = ssr_crash->dump_info;
 	if (!dump_info) {
 		trace_qaic_ssr(qdev->qddev, "Not in SSR. Invalid dbg transfer done resp.", -EINVAL);
 		return;
 	}
 
 	if (status) {
-		free_ssr_dump_info(dump_info);
+		free_ssr_dump_info(ssr_crash);
 		trace_qaic_ssr(qdev->qddev, "SSR transfer done failed.", status);
 		return;
 	}
@@ -608,7 +602,7 @@ static void dbg_xfer_done_rsp(struct qaic_device *qdev, struct dma_bridge_chan *
 	dev_coredumpv(dev, dump_info->dump_addr, dump_info->dump_sz, GFP_KERNEL);
 	/* dev_coredumpv will free dump_info->dump_addr */
 	dump_info->dump_addr = NULL;
-	free_ssr_dump_info(dump_info);
+	free_ssr_dump_info(ssr_crash);
 }
 
 static void ssr_worker(struct work_struct *work)
@@ -617,6 +611,7 @@ static void ssr_worker(struct work_struct *work)
 	struct ssr_hdr *hdr = (struct ssr_hdr *)resp->data;
 	struct ssr_dump_info *dump_info = NULL;
 	struct qaic_device *qdev = resp->qdev;
+	struct ssr_crashdump *ssr_crash;
 	struct ssr_event_rsp *event_rsp;
 	struct dma_bridge_chan *dbc;
 	struct ssr_event *event;
@@ -642,22 +637,22 @@ static void ssr_worker(struct work_struct *work)
 
 	switch (hdr->cmd) {
 	case DEBUG_TRANSFER_INFO:
-		ret = dbg_xfer_info_rsp(qdev, dbc, (struct ssr_debug_transfer_info *)resp->data,
-					&dump_info);
+		ret = dbg_xfer_info_rsp(qdev, dbc, (struct ssr_debug_transfer_info *)resp->data);
 		if (ret) {
 			trace_qaic_ssr(qdev->qddev, "Failed dbg_xfer_info_rsp().", ret);
 			break;
 		}
 
-		dbc->dump_info = dump_info;
+		ssr_crash = qdev->ssr_mhi_buf;
+		dump_info = ssr_crash->dump_info;
 		dump_info->dbc = dbc;
 		dump_info->resp = resp;
 
 		/* Start by downloading debug table */
-		ret = mem_read_req(qdev, dump_info, dump_info->tbl_addr_dev,
-				   min(dump_info->tbl_len, dump_info->chunk_sz));
+		ret = mem_read_req(qdev, dump_info->tbl_addr_dev,
+				   min(dump_info->tbl_len, SSR_MEM_READ_CHUNK_SIZE));
 		if (ret) {
-			free_ssr_dump_info(dump_info);
+			free_ssr_dump_info(ssr_crash);
 			trace_qaic_ssr(qdev->qddev, "Failed mem_read_req().", ret);
 			break;
 		}
@@ -672,6 +667,7 @@ static void ssr_worker(struct work_struct *work)
 		event = (struct ssr_event *)hdr;
 		le32_to_cpus(&event->event);
 		ssr_event_ack = event->event;
+		ssr_crash = qdev->ssr_mhi_buf;
 
 		switch (event->event) {
 		case BEFORE_SHUTDOWN:
@@ -691,11 +687,11 @@ static void ssr_worker(struct work_struct *work)
 			 * crashdump for this DBC is still in progress. NACK
 			 * the SSR event
 			 */
-			if (dbc->dump_info) {
-				free_ssr_dump_info(dbc->dump_info);
+			if (ssr_crash && ssr_crash->dump_info) {
+				free_ssr_dump_info(ssr_crash);
 				ssr_event_ack = SSR_EVENT_NACK;
 				trace_qaic_ssr(qdev->qddev, "Unexpected AFTER_POWER_UP event received dump downloading still in progress.",
-					       PTR_ERR(dbc->dump_info));
+					       -EINVAL);
 				break;
 			}
 
@@ -724,7 +720,7 @@ static void ssr_worker(struct work_struct *work)
 		}
 
 		if (event->event == AFTER_POWER_UP && ssr_event_ack != SSR_EVENT_NACK) {
-			dbc_exit_ssr(qdev, hdr->dbc_id);
+			dbc_exit_ssr(qdev);
 			set_dbc_state(qdev, hdr->dbc_id, DBC_STATE_IDLE);
 		}
 
@@ -788,6 +784,7 @@ static void qaic_ssr_mhi_remove(struct mhi_device *mhi_dev)
 static void qaic_ssr_mhi_ul_xfer_cb(struct mhi_device *mhi_dev, struct mhi_result *mhi_result)
 {
 	struct qaic_device *qdev = dev_get_drvdata(&mhi_dev->dev);
+	struct ssr_crashdump *ssr_crash = qdev->ssr_mhi_buf;
 	struct _ssr_hdr *hdr = mhi_result->buf_addr;
 	struct ssr_dump_info *dump_info;
 
@@ -803,10 +800,12 @@ static void qaic_ssr_mhi_ul_xfer_cb(struct mhi_device *mhi_dev, struct mhi_resul
 	 * request buffer, we allocate only one such buffer and free it only
 	 * once.
 	 */
-	dump_info = qdev->dbc[le32_to_cpu(hdr->dbc_id)].dump_info;
 	if (le32_to_cpu(hdr->cmd) == MEMORY_READ) {
-		dump_info->read_buf_req_queued = false;
-		return;
+		dump_info = ssr_crash->dump_info;
+		if (dump_info) {
+			dump_info->read_buf_req_queued = false;
+			return;
+		}
 	}
 
 	kfree(mhi_result->buf_addr);
@@ -815,13 +814,24 @@ static void qaic_ssr_mhi_ul_xfer_cb(struct mhi_device *mhi_dev, struct mhi_resul
 static void qaic_ssr_mhi_dl_xfer_cb(struct mhi_device *mhi_dev, struct mhi_result *mhi_result)
 {
 	struct ssr_resp *resp = container_of(mhi_result->buf_addr, struct ssr_resp, data);
+	struct qaic_device *qdev = dev_get_drvdata(&mhi_dev->dev);
+	struct ssr_crashdump *ssr_crash = qdev->ssr_mhi_buf;
+	bool memory_read_rsp = false;
+
+	if (ssr_crash && ssr_crash->data == mhi_result->buf_addr)
+		memory_read_rsp = true;
 
 	if (mhi_result->transaction_status) {
-		kfree(resp);
+		/* Do not free SSR crashdump buffer as it allocated via managed APIs */
+		if (!memory_read_rsp)
+			kfree(resp);
 		return;
 	}
 
-	queue_work(resp->qdev->ssr_wq, &resp->work);
+	if (memory_read_rsp)
+		queue_work(qdev->ssr_wq, &ssr_crash->work);
+	else
+		queue_work(qdev->ssr_wq, &resp->work);
 }
 
 static const struct mhi_device_id qaic_ssr_mhi_match_table[] = {
@@ -840,6 +850,27 @@ static struct mhi_driver qaic_ssr_mhi_driver = {
 		.owner = THIS_MODULE,
 	},
 };
+
+int ssr_init(struct qaic_device *qdev, struct drm_device *drm)
+{
+	struct ssr_crashdump *ssr_crash;
+
+	qdev->ssr_dbc = SSR_DBC_SENTINEL;
+
+	/*
+	 * Device requests only one SSR at a time. So allocating only one
+	 * buffer to download crashdump is good enough.
+	 */
+	ssr_crash = drmm_kzalloc(drm, SSR_MHI_BUF_SIZE, GFP_KERNEL);
+	if (!ssr_crash)
+		return -ENOMEM;
+
+	ssr_crash->qdev = qdev;
+	INIT_WORK(&ssr_crash->work, ssr_dump_worker);
+	qdev->ssr_mhi_buf = ssr_crash;
+
+	return 0;
+}
 
 int qaic_ssr_register(void)
 {

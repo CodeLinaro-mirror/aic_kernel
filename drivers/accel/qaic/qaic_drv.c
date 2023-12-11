@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 /* Copyright (c) 2019-2021, The Linux Foundation. All rights reserved. */
-/* Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved. */
+/* Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved. */
 
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
@@ -359,11 +359,9 @@ void qaic_dev_reset_clean_local_state(struct qaic_device *qdev)
 	qaic_notify_reset(qdev);
 
 	/* start tearing things down */
-	for (i = 0; i < qdev->num_dbc; ++i) {
+	clean_up_ssr(qdev);
+	for (i = 0; i < qdev->num_dbc; ++i)
 		release_dbc(qdev, i);
-		clean_up_ssr(qdev, i);
-	}
-
 }
 
 static struct qaic_device *create_qdev(struct pci_dev *pdev, const struct pci_device_id *id)
@@ -422,6 +420,10 @@ static struct qaic_device *create_qdev(struct pci_dev *pdev, const struct pci_de
 	ret = qaicm_srcu_init(drm, &qdev->dev_lock);
 	if (ret)
 		return NULL;
+
+	ret = ssr_init(qdev, drm);
+	if (ret)
+		pci_info(pdev, "QAIC SSR crashdump collection not supported (No memory).\n");
 
 	qdev->qddev = qddev;
 	qdev->pdev = pdev;

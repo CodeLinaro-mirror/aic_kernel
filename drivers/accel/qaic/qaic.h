@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only
  *
  * Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _QAIC_H_
@@ -22,6 +22,7 @@
 
 #define QAIC_DBC_BASE		SZ_128K
 #define QAIC_DBC_SIZE		SZ_4K
+#define SSR_DBC_SENTINEL	U32_MAX /* No ongoing SSR sentinel */
 
 #define QAIC_NO_PARTITION	-1
 
@@ -127,14 +128,6 @@ struct dma_bridge_chan {
 	unsigned int		state;
 	/* Debugfs root directory for this DBC /sys/kernel/debug/accel/<minor_id>/dbc* */
 	struct dentry		*debugfs_root;
-	/*
-	 * Points to a book keeping struct maintained by MHI SSR device while
-	 * downloading a SSR crashdump. It is NULL when there no crashdump
-	 * downloading in progress.
-	 */
-	void			*dump_info;
-	/* true: This DBC is under sub system reset(SSR); false: Otherwise */
-	bool			in_ssr;
 };
 
 struct qaic_device {
@@ -220,6 +213,10 @@ struct qaic_device {
 	bool			tele_lost_buf;
 	/* Work queue for tasks related to MHI telemetry device */
 	struct workqueue_struct	*tele_wq;
+	/* Buffer to collect SSR crashdump via SSR MHI channel */
+	void			*ssr_mhi_buf;
+	/* DBC which is under SSR. Sentinel U32_MAX would mean that no SSR in progress */
+	u32			ssr_dbc;
 };
 
 struct qaic_drm_device {
@@ -447,7 +444,7 @@ int qaic_perf_stats_bo_ioctl(struct drm_device *dev, void *data, struct drm_file
 int qaic_detach_slice_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *file_priv);
 void irq_polling_work(struct work_struct *work);
 void dbc_enter_ssr(struct qaic_device *qdev, u32 dbc_id);
-void dbc_exit_ssr(struct qaic_device *qdev, u32 dbc_id);
+void dbc_exit_ssr(struct qaic_device *qdev);
 
 /* qaic_sysfs.c */
 int qaic_sysfs_init(struct qaic_drm_device *qddev);

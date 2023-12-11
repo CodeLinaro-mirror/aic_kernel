@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 /* Copyright (c) 2019-2021, The Linux Foundation. All rights reserved. */
-/* Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved. */
+/* Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved. */
 
 #include <linux/bitfield.h>
 #include <linux/bits.h>
@@ -1047,7 +1047,7 @@ int qaic_attach_slice_bo_ioctl(struct drm_device *dev, void *data, struct drm_fi
 		goto unlock_ch_srcu;
 	}
 
-	if (dbc->in_ssr) {
+	if (dbc->id == qdev->ssr_dbc) {
 		ret = -EPIPE;
 		trace_qaic_attach_slice_bo_1(usr->qddev, "SSR in progress. dbc_id=%llu", dbc->id);
 		goto unlock_ch_srcu;
@@ -1417,7 +1417,7 @@ static int __qaic_execute_bo_ioctl(struct drm_device *dev, void *data, struct dr
 		goto release_ch_rcu;
 	}
 
-	if (dbc->in_ssr) {
+	if (dbc->id == qdev->ssr_dbc) {
 		ret = -EPIPE;
 		trace_qaic_execute_1(usr->qddev, "SSR in progress. dbc_id=%llu", dbc->id);
 		goto release_ch_rcu;
@@ -1778,7 +1778,7 @@ int qaic_wait_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *file
 		goto unlock_ch_srcu;
 	}
 
-	if (dbc->in_ssr) {
+	if (dbc->id == qdev->ssr_dbc) {
 		ret = -EPIPE;
 		trace_qaic_wait_1(usr->qddev, "SSR in progress dbc_id=%llu", dbc->id);
 		goto unlock_ch_srcu;
@@ -1807,7 +1807,7 @@ int qaic_wait_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *file
 		ret = -EPERM;
 		trace_qaic_wait(usr->qddev, "User went away while waiting.", ret);
 	}
-	if (dbc->in_ssr) {
+	if (dbc->id == qdev->ssr_dbc) {
 		ret = -EPIPE;
 		trace_qaic_wait(usr->qddev, "SSR occurred while waiting.", ret);
 	}
@@ -2115,7 +2115,7 @@ void qaic_data_get_fifo_info(struct dma_bridge_chan *dbc, u32 *head, u32 *tail)
 /**
  * dbc_enter_ssr - Prepare to enter in sub system reset(SSR) for given DBC ID
  * During SSR we cannot support execute ioctl and wait ioctl for the given DBC.
- * We control this behaviour using in_ssr flag in DBC.
+ * We control this behaviour using ssr_dbc flag in qdev.
  * @qdev: Qranium device handle
  * @dbc_id: ID of the DBC which will enter SSR
  */
@@ -2123,18 +2123,17 @@ void dbc_enter_ssr(struct qaic_device *qdev, u32 dbc_id)
 {
 	struct dma_bridge_chan *dbc = &qdev->dbc[dbc_id];
 
-	dbc->in_ssr = true;
+	qdev->ssr_dbc = dbc_id;
 	sync_empty_xfer_list(qdev, dbc);
 }
 
 /**
  * dbc_exit_ssr - Prepare to exit from sub system reset(SSR) for given DBC ID
  * After SSR we exit SSR we can resume our supporting execute ioctl and
- * wait ioctl. We control this behaviour using in_ssr flag in DBC.
+ * wait ioctl. We control this behaviour using ssr_dbc flag in qdev.
  * @qdev: Qranium device handle
- * @dbc_id: ID of the DBC which will exit SSR
  */
-void dbc_exit_ssr(struct qaic_device *qdev, u32 dbc_id)
+void dbc_exit_ssr(struct qaic_device *qdev)
 {
-	qdev->dbc[dbc_id].in_ssr = false;
+	qdev->ssr_dbc = SSR_DBC_SENTINEL;
 }
