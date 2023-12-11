@@ -541,7 +541,7 @@ static int dbg_xfer_info_rsp(struct qaic_device *qdev, struct dma_bridge_chan *d
 
 	struct ssr_debug_transfer_info_rsp *debug_rsp;
 	struct ssr_dump_info *dump_info;
-	int ret = 0;
+	int ret = 0, ret2;
 
 	debug_rsp = kmalloc(sizeof(*debug_rsp), GFP_KERNEL);
 	if (!debug_rsp) {
@@ -574,12 +574,12 @@ send_rsp:
 	 */
 	debug_rsp->ret = cpu_to_le32(ret ? 1 : 0);
 
-	ret = mhi_queue_buf(qdev->ssr_ch, DMA_TO_DEVICE, debug_rsp, sizeof(*debug_rsp), MHI_EOT);
-	if (ret) {
+	ret2 = mhi_queue_buf(qdev->ssr_ch, DMA_TO_DEVICE, debug_rsp, sizeof(*debug_rsp), MHI_EOT);
+	if (ret2) {
 		free_ssr_dump_info(dump_info);
 		kfree(debug_rsp);
-		trace_qaic_ssr(qdev->qddev, "MHI failed to send debug rsp.", ret);
-		return ret;
+		trace_qaic_ssr(qdev->qddev, "MHI failed to send debug rsp.", ret2);
+		return ret2;
 	}
 
 	*dump_info_out = dump_info;
