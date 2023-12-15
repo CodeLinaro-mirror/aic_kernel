@@ -369,7 +369,7 @@ static inline int drmm_mutex_init(struct drm_device *dev, struct mutex *lock)
 int qaic_accel_gem_object_mmap(struct drm_gem_object *obj, struct vm_area_struct *vma);
 #endif
 
-#ifdef _QBP_HAS_GEM_PRIME_GET_SG_TABLE
+#ifdef _QBP_HAS_DRM_DRV_WITH_GEM_PRIME_GET_SG_TABLE
 struct sg_table *qaic_get_sg_table(struct drm_gem_object *obj);
 #endif
 
