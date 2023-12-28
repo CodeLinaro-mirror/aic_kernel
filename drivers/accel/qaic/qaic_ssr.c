@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 /* Copyright (c) 2020-2021, The Linux Foundation. All rights reserved. */
-/* Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved. */
+/* Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved. */
 
 #include <asm/byteorder.h>
 #include <drm/drm_file.h>
@@ -590,9 +590,9 @@ send_rsp:
 static void dbg_xfer_done_rsp(struct qaic_device *qdev, struct dma_bridge_chan *dbc,
 			      struct ssr_debug_transfer_done_rsp *xfer_rsp)
 {
-	struct device *kdev = to_accel_kdev(qdev->qddev);
 	struct ssr_dump_info *dump_info = dbc->dump_info;
 	u32 status = le32_to_cpu(xfer_rsp->ret);
+	struct device *dev = &qdev->pdev->dev;
 
 	if (!dump_info) {
 		trace_qaic_ssr(qdev->qddev, "Not in SSR. Invalid dbg transfer done resp.", -EINVAL);
@@ -605,7 +605,7 @@ static void dbg_xfer_done_rsp(struct qaic_device *qdev, struct dma_bridge_chan *
 		return;
 	}
 
-	dev_coredumpv(kdev, dump_info->dump_addr, dump_info->dump_sz, GFP_KERNEL);
+	dev_coredumpv(dev, dump_info->dump_addr, dump_info->dump_sz, GFP_KERNEL);
 	/* dev_coredumpv will free dump_info->dump_addr */
 	dump_info->dump_addr = NULL;
 	free_ssr_dump_info(dump_info);
