@@ -379,19 +379,18 @@ static int ssr_copy_dump(struct ssr_dump_info *dump_info, void *data, u64 len)
 
 static void ssr_dump_worker(struct work_struct *work)
 {
-	struct ssr_resp *read_buf_rsp = container_of(work, struct ssr_resp, work);
-	struct qaic_device *qdev = read_buf_rsp->qdev;
+	struct ssr_crashdump *ssr_crash = container_of(work, struct ssr_crashdump, work);
+	struct qaic_device *qdev = ssr_crash->qdev;
 	struct ssr_memory_read_rsp *mem_rd_resp;
 	struct debug_info_table *tbl_ent;
 	struct ssr_dump_info *dump_info;
-	struct ssr_crashdump *ssr_crash;
 	u64 dest_addr, dest_len;
 	struct _ssr_hdr *_hdr;
 	struct ssr_hdr hdr;
 	u64 data_len;
 	int ret;
 
-	mem_rd_resp = (struct ssr_memory_read_rsp *)read_buf_rsp->data;
+	mem_rd_resp = (struct ssr_memory_read_rsp *)ssr_crash->data;
 	_hdr = &mem_rd_resp->hdr;
 	hdr.cmd = le32_to_cpu(_hdr->cmd);
 	hdr.len = le32_to_cpu(_hdr->len);
@@ -403,7 +402,6 @@ static void ssr_dump_worker(struct work_struct *work)
 		goto reset_device;
 	}
 
-	ssr_crash = qdev->ssr_mhi_buf;
 	dump_info = ssr_crash->dump_info;
 	if (!dump_info) {
 		trace_qaic_ssr(qdev->qddev, "Invalid state device not in reset.", -EINVAL);
