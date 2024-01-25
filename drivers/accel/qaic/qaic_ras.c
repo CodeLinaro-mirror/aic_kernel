@@ -12,9 +12,10 @@
 #include "qaic_ras.h"
 
 #define MAGIC		0x55AA
-#define VERSION		0x1
+#define VERSION		0x2
 #define HDR_SZ		12
 #define NUM_TEMP_LVL	3
+#define POWER_BREAK	BIT(0)
 
 enum msg_type {
 	MSG_PUSH, /* async push from device */
@@ -174,6 +175,12 @@ struct pcie_syndrome {
 	/* UE info */
 	u32 addr;
 	u8  index;
+	/*
+	 * Flag to indicate specific event of PCIe
+	 * BIT(0): Power break (low power)
+	 * BIT(1) to BIT(7): Reserved
+	 */
+	u8 flag;
 } __packed;
 
 static const char * const threshold_type_str[NUM_TEMP_LVL] = {
@@ -344,6 +351,9 @@ static void decode_ras_msg(struct qaic_device *qdev, struct ras_data *msg)
 			       pcie_syndrome->replay_timeout,
 			       pcie_syndrome->rx_err,
 			       pcie_syndrome->internal_ce_count);
+			if (msg->ver > 0x1)
+				pr_warn("    Power break %s\n",
+					pcie_syndrome->flag & POWER_BREAK ? "ON" : "OFF");
 			break;
 		case UE:
 			printk(KERN_ERR pr_fmt("Syndrome:\n    Index %d\n    Address 0x%x\n"),
