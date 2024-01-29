@@ -287,7 +287,7 @@ static void decode_ras_msg(struct qaic_device *qdev, struct ras_data *msg)
 		return;
 	}
 
-	if (msg->ver != VERSION) {
+	if (!msg->ver || msg->ver > VERSION) {
 		pci_warn(qdev->pdev, "Dropping RAS message with invalid version %d\n", msg->ver);
 		return;
 	}
