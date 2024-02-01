@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 /* Copyright (c) 2020-2021, The Linux Foundation. All rights reserved. */
-/* Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved. */
+/* Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved. */
 
 #include <asm/byteorder.h>
 #include <linux/completion.h>
@@ -37,7 +37,7 @@ enum cmds {
 	CMD_THERMAL_DDR_TEMP,
 	CMD_THERMAL_WARNING_TEMP,
 	CMD_THERMAL_SHUTDOWN_TEMP,
-	CMD_CURRENT_TDP,
+	CMD_BOARD_TDP,
 	CMD_BOARD_POWER,
 	CMD_POWER_STATE,
 	CMD_POWER_MAX,
@@ -55,6 +55,8 @@ enum cmds {
 	CMD_THERMAL_PMIC_TEMP_C,
 	CMD_THERMAL_PMIC_TEMP_E,
 	CMD_POWER_ACTION,
+	CMD_SOC_TDP,
+	CMD_SOC_POWER,
 };
 
 enum cmd_type {
@@ -685,11 +687,23 @@ static int qaic_read(struct device *dev, enum hwmon_sensor_types type, u32 attr,
 	case hwmon_power:
 		switch (attr) {
 		case hwmon_power_max:
-			ret = telemetry_request(qdev, CMD_CURRENT_TDP, TYPE_READ, &val);
+			if (channel == 0)
+				cmd = CMD_BOARD_TDP;
+			else if (channel == 1)
+				cmd = CMD_SOC_TDP;
+			else
+				goto exit;
+			ret = telemetry_request(qdev, cmd, TYPE_READ, &val);
 			val *= 1000000;
 			goto exit;
 		case hwmon_power_input:
-			ret = telemetry_request(qdev, CMD_BOARD_POWER, TYPE_READ, &val);
+			if (channel == 0)
+				cmd = CMD_BOARD_POWER;
+			else if (channel == 1)
+				cmd = CMD_SOC_POWER;
+			else
+				goto exit;
+			ret = telemetry_request(qdev, cmd, TYPE_READ, &val);
 			val *= 1000000;
 			goto exit;
 		default:
@@ -767,6 +781,7 @@ static int qaic_write(struct device *dev, enum hwmon_sensor_types type, u32 attr
 	int ret = -EOPNOTSUPP;
 	int rcu_id;
 	s64 val;
+	u8 cmd;
 
 	val = vall;
 	rcu_id = srcu_read_lock(&qdev->dev_lock);
@@ -779,8 +794,14 @@ static int qaic_write(struct device *dev, enum hwmon_sensor_types type, u32 attr
 	case hwmon_power:
 		switch (attr) {
 		case hwmon_power_max:
+			if (channel == 0)
+				cmd = CMD_BOARD_TDP;
+			else if (channel == 1)
+				cmd = CMD_SOC_TDP;
+			else
+				goto exit;
 			val /= 1000000;
-			ret = telemetry_request(qdev, CMD_CURRENT_TDP, TYPE_WRITE, &val);
+			ret = telemetry_request(qdev, cmd, TYPE_WRITE, &val);
 			goto exit;
 		default:
 			goto exit;
@@ -840,6 +861,7 @@ static const struct hwmon_channel_info qaic_temp = {
 
 static const u32 qaic_config_power[] = {
 	HWMON_P_INPUT | HWMON_P_MAX, /* board level */
+	HWMON_P_INPUT | HWMON_P_MAX, /* soc level */
 	0
 };
 
