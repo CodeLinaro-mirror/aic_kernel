@@ -232,7 +232,6 @@ static void qaicm_add_final_kfree(struct drm_device *dev, void *container)
 	to_qaic_drm_device(dev)->managed.final_kfree = container;
 }
 
-#ifndef _QBP_ALT_DRM_MANAGED_NO_RELEASE
 static void qaicm_managed_release(struct drm_device *dev)
 {
 	struct drmres *dr, *tmp;
@@ -249,6 +248,7 @@ static void qaicm_managed_release(struct drm_device *dev)
 		free_dr(dr);
 	}
 }
+#ifndef _QBP_ALT_DRM_MANAGED_NO_RELEASE
 static void qaicm_dev_release(struct drm_device *dev)
 {
 	struct qaic_drm_device *qddev = to_qaic_drm_device(dev);
