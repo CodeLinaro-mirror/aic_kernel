@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 
-/* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved. */
+/* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved. */
 
 #ifndef _QAIC_BACKSUPPORT_H_
 #define _QAIC_BACKSUPPORT_H_
@@ -301,6 +301,9 @@ static inline void dma_sync_sgtable_for_device(struct device *dev,
 }
 
 #define for_each_sgtable_sg(sgt, sg, i)         \
+	for_each_sg((sgt)->sgl, sg, (sgt)->orig_nents, i)
+
+#define for_each_sgtable_dma_sg(sgt, sg, i)	\
 	for_each_sg((sgt)->sgl, sg, (sgt)->nents, i)
 #endif /* end _QBP_NEED_DMA_SYNC_SGTABLE */
 
