@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 /* Copyright (c) 2020, The Linux Foundation. All rights reserved. */
-/* Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved. */
+/* Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved. */
 
 #include <drm/drm_debugfs.h>
 #include <drm/drm_managed.h>
@@ -21,6 +21,7 @@
 
 #define BOOTLOG_POOL_SIZE		16
 #define BOOTLOG_MSG_SIZE		512
+#define QAIC_DBC_DIR_NAME		9
 
 struct bootlog_msg {
 	/* Buffer for bootlog messages */
@@ -42,13 +43,12 @@ struct bootlog_page {
 
 static int bootlog_show(struct seq_file *s, void *unused)
 {
-	struct drm_info_node *node = s->private;
 	struct bootlog_page *page;
 	struct qaic_device *qdev;
 	void *page_end;
 	void *log;
 
-	qdev = to_qaic_device(node->minor->dev);
+	qdev = s->private;
 	mutex_lock(&qdev->bootlog_mutex);
 	list_for_each_entry(page, &qdev->bootlog, node) {
 		log = page + 1;
@@ -63,23 +63,45 @@ static int bootlog_show(struct seq_file *s, void *unused)
 	return 0;
 }
 
+static int bootlog_fops_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, bootlog_show, inode->i_private);
+}
+
+static const struct file_operations bootlog_fops = {
+	.owner = THIS_MODULE,
+	.open = bootlog_fops_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
 static int read_dbc_fifo_size(struct seq_file *s, void *unused)
 {
-	struct drm_info_node *node = s->private;
-	struct dma_bridge_chan *dbc;
+	struct dma_bridge_chan *dbc = s->private;
 
-	dbc = node->info_ent->data;
 	seq_printf(s, "%u\n", dbc->nelem);
 	return 0;
 }
 
+static int fifo_size_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, read_dbc_fifo_size, inode->i_private);
+}
+
+static const struct file_operations fifo_size_fops = {
+	.owner = THIS_MODULE,
+	.open = fifo_size_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
 static int read_dbc_queued(struct seq_file *s, void *unused)
 {
-	struct drm_info_node *node = s->private;
-	struct dma_bridge_chan *dbc;
+	struct dma_bridge_chan *dbc = s->private;
 	u32 tail = 0, head = 0;
 
-	dbc = node->info_ent->data;
 	qaic_data_get_fifo_info(dbc, &head, &tail);
 
 	if (head == U32_MAX || tail == U32_MAX)
@@ -92,43 +114,36 @@ static int read_dbc_queued(struct seq_file *s, void *unused)
 	return 0;
 }
 
-static const struct drm_info_list qaic_debugfs_list[] = {
-	{"bootlog", bootlog_show, 0, NULL}
-};
-
-#define QAIC_DEBUGFS_ENTRIES ARRAY_SIZE(qaic_debugfs_list)
-
-static void qaic_debugfs_add_dbc_entry(struct qaic_device *qdev, struct dma_bridge_chan *dbc,
-				       struct drm_minor *minor)
+static int queued_open(struct inode *inode, struct file *file)
 {
-	struct drm_info_list *dbc_debugfs_list;
-	char name[16];
-
-	snprintf(name, 16, "dbc%03u", dbc->id);
-	dbc->debugfs_root = debugfs_create_dir(name, minor->debugfs_root);
-
-	dbc_debugfs_list = &qdev->qddev->dbc_debugfs_list[dbc->id * DBC_DEBUGFS_ENTRIES];
-	/* FIFO_SIZE */
-	dbc_debugfs_list[0].name = "fifo_size";
-	dbc_debugfs_list[0].show = read_dbc_fifo_size;
-	dbc_debugfs_list[0].data = dbc;
-	/* QUEUED */
-	dbc_debugfs_list[1].name = "queued";
-	dbc_debugfs_list[1].show = read_dbc_queued;
-	dbc_debugfs_list[1].data = dbc;
-
-	drm_debugfs_create_files(dbc_debugfs_list, DBC_DEBUGFS_ENTRIES, dbc->debugfs_root, minor);
+	return single_open(file, read_dbc_queued, inode->i_private);
 }
 
-void qaic_debugfs_init(struct drm_minor *minor)
+static const struct file_operations queued_fops = {
+	.owner = THIS_MODULE,
+	.open = queued_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+void qaic_debugfs_init(struct qaic_drm_device *qddev)
 {
-	struct qaic_device *qdev = to_qaic_drm_device(minor->dev)->qdev;
+	struct qaic_device *qdev = qddev->qdev;
+	struct dentry *debugfs_root;
+	struct dentry *debugfs_dir;
+	char name[QAIC_DBC_DIR_NAME];
 	uint16_t i;
 
-	for (i = 0; i < qdev->num_dbc; ++i)
-		qaic_debugfs_add_dbc_entry(qdev, &qdev->dbc[i], minor);
-	drm_debugfs_create_files(qaic_debugfs_list, QAIC_DEBUGFS_ENTRIES, minor->debugfs_root,
-				 minor);
+	debugfs_root = qddev->drm.debugfs_root;
+
+	debugfs_create_file("bootlog", 0400, debugfs_root, qdev, &bootlog_fops);
+	for (i = 0; i < qdev->num_dbc; ++i) {
+		snprintf(name, QAIC_DBC_DIR_NAME, "dbc%03u", i);
+		debugfs_dir = debugfs_create_dir(name, debugfs_root);
+		debugfs_create_file("fifo_size", 0400, debugfs_dir, &qdev->dbc[i], &fifo_size_fops);
+		debugfs_create_file("queued", 0400, debugfs_dir, &qdev->dbc[i], &queued_fops);
+	}
 }
 
 static struct bootlog_page *alloc_bootlog_page(struct qaic_device *qdev)

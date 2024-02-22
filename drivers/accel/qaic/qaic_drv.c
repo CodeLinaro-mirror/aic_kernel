@@ -215,7 +215,6 @@ static const struct drm_driver qaic_accel_driver = {
 	.fops			= &qaic_accel_fops,
 	.open			= qaic_open,
 	.postclose		= qaic_postclose,
-	.debugfs_init		= qaic_debugfs_init,
 
 	.ioctls			= qaic_drm_ioctls,
 	.num_ioctls		= ARRAY_SIZE(qaic_drm_ioctls),
@@ -246,6 +245,8 @@ static int qaic_create_drm_device(struct qaic_device *qdev, s32 partition_id)
 		pci_dbg(qdev->pdev, "qaic_sysfs_init failed %d\n", ret);
 		return ret;
 	}
+
+	qaic_debugfs_init(qddev);
 
 	return ret;
 }
@@ -445,13 +446,6 @@ static struct qaic_device *create_qdev(struct pci_dev *pdev, const struct pci_de
 		init_waitqueue_head(&qdev->dbc[i].dbc_release);
 		INIT_LIST_HEAD(&qdev->dbc[i].bo_lists);
 	}
-
-#ifdef CONFIG_DEBUG_FS
-	qddev->dbc_debugfs_list = drmm_kcalloc(to_drm(qddev), DBC_DEBUGFS_ENTRIES * qdev->num_dbc,
-					       sizeof(*qddev->dbc_debugfs_list), GFP_KERNEL);
-	if (!qddev->dbc_debugfs_list)
-		return NULL;
-#endif
 
 	return qdev;
 }

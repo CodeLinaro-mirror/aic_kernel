@@ -237,8 +237,6 @@ struct qaic_drm_device {
 	struct mutex		users_mutex;
 	/* Pointer to array of DBC sysfs attributes */
 	void			*sysfs_attrs;
-	/* Debugfs info list for all DBC */
-	struct drm_info_list	*dbc_debugfs_list;
 };
 
 struct qaic_bo {
