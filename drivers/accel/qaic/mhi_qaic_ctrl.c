@@ -522,7 +522,6 @@ static const struct mhi_device_id mhi_qaic_ctrl_match_table[] = {
 	{ .chan = "QAIC_DIAG",		.driver_data = SZ_4K},
 	{ .chan = "QAIC_QDSS",		.driver_data = SZ_4K},
 	{ .chan = "QAIC_SAHARA",	.driver_data = SZ_32K},
-	{ .chan = "QAIC_TIMESYNC",	.driver_data = SZ_4K},
 	{},
 };
 MODULE_DEVICE_TABLE(mhi, mhi_qaic_ctrl_match_table);
