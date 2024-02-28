@@ -51,10 +51,6 @@ void set_dbc_state(struct qaic_device *qdev, u32 dbc_id, unsigned int state)
 	snprintf(state_str, ARRAY_SIZE(state_str), "DBC_STATE=%d", state);
 
 	qdev->dbc[dbc_id].state = state;
-	/*
-	 * Once implementation of partitions is decided we should send this notification to
-	 * all child devices too.
-	 */
 	kobject_uevent_env(&kdev->kobj, KOBJ_CHANGE, envp);
 }
 
