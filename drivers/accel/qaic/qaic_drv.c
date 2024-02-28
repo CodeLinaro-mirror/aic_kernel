@@ -404,6 +404,9 @@ static struct qaic_device *create_qdev(struct pci_dev *pdev, const struct pci_de
 	ret = drmm_mutex_init(drm, &qdev->bootlog_mutex);
 	if (ret)
 		return NULL;
+	ret = drmm_mutex_init(drm, &qdev->tele_mutex);
+	if (ret)
+		return NULL;
 
 	qdev->cntl_wq = qaicm_wq_init(drm, "qaic_cntl");
 	if (IS_ERR(qdev->cntl_wq))
