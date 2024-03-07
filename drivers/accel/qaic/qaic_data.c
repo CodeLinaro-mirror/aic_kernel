@@ -1423,6 +1423,12 @@ static int __qaic_execute_bo_ioctl(struct drm_device *dev, void *data, struct dr
 		goto release_ch_rcu;
 	}
 
+	ret = mutex_lock_interruptible(&dbc->req_lock);
+	if (ret) {
+		trace_qaic_execute(qdev->qddev, "DBC req queue mutex lock interrupted.", ret);
+		goto release_ch_rcu;
+	}
+
 	head = readl(dbc->dbc_base + REQHP_OFF);
 	tail = readl(dbc->dbc_base + REQTP_OFF);
 
@@ -1430,7 +1436,7 @@ static int __qaic_execute_bo_ioctl(struct drm_device *dev, void *data, struct dr
 		/* PCI link error */
 		ret = -ENODEV;
 		trace_qaic_execute(usr->qddev, "PCI link error.", ret);
-		goto release_ch_rcu;
+		goto unlock_req_lock;
 	}
 
 	queue_level = head <= tail ? tail - head : dbc->nelem - (head - tail);
@@ -1439,12 +1445,13 @@ static int __qaic_execute_bo_ioctl(struct drm_device *dev, void *data, struct dr
 				     head, &tail);
 	if (ret) {
 		trace_qaic_execute(usr->qddev, "Failed send_bo_list_to_device().", ret);
-		goto release_ch_rcu;
+		goto unlock_req_lock;
 	}
 
 	/* Finalize commit to hardware */
 	submit_ts = ktime_get_ns();
 	writel(tail, dbc->dbc_base + REQTP_OFF);
+	mutex_unlock(&dbc->req_lock);
 
 	update_profiling_data(file_priv, exec, args->hdr.count, is_partial, received_ts,
 			      submit_ts, queue_level);
@@ -1452,6 +1459,9 @@ static int __qaic_execute_bo_ioctl(struct drm_device *dev, void *data, struct dr
 	if (datapath_polling)
 		schedule_work(&dbc->poll_work);
 
+unlock_req_lock:
+	if (ret)
+		mutex_unlock(&dbc->req_lock);
 release_ch_rcu:
 	srcu_read_unlock(&dbc->ch_lock, rcu_id);
 unlock_dev_srcu:
