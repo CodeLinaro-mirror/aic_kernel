@@ -845,7 +845,6 @@ static struct mhi_driver qaic_ssr_mhi_driver = {
 	.dl_xfer_cb = qaic_ssr_mhi_dl_xfer_cb,
 	.driver = {
 		.name = "qaic_ssr",
-		.owner = THIS_MODULE,
 	},
 };
 

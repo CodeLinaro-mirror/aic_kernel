@@ -1010,7 +1010,6 @@ static struct mhi_driver qaic_telemetry_mhi_driver = {
 	.dl_xfer_cb = qaic_telemetry_mhi_dl_xfer_cb,
 	.driver = {
 		.name = "qaic_telemetry",
-		.owner = THIS_MODULE,
 	},
 };
 
