@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only
  *
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _QAIC_ACCEL_HELPERS
@@ -1042,7 +1042,18 @@ static int accel_alloc(struct qaic_drm_device *qddev)
 	if (!acc_minor)
 		return -ENOMEM;
 
-	acc_minor->type = 32; /* the DRM_MINOR_ACCEL type (but not defined locally since we're acting as Render too) */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
+	acc_minor->type = 32; /* the DRM_MINOR_ACCEL type */
+#else
+	/*
+	 * To support PRIME ioctls without the use of sudo/root we need
+	 * to make our accel device node mimic a render node.
+	 * Although we may not be registering as a render node but if
+	 * someone looks (such as drm_is_render_client()) they will think
+	 * this node is render node.
+	 */
+	acc_minor->type = DRM_MINOR_RENDER;
+#endif
 
 	acc_minor->dev = to_drm(qddev);
 
