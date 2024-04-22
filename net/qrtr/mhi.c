@@ -131,6 +131,10 @@ static struct mhi_driver qcom_mhi_qrtr_driver = {
 
 module_mhi_driver(qcom_mhi_qrtr_driver);
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5,7,0))
+MODULE_ALIAS("pci:v000017CBd0000A100sv*sd*bc*sc*i*");
+#endif
+
 MODULE_AUTHOR("Chris Lew <clew@codeaurora.org>");
 MODULE_AUTHOR("Manivannan Sadhasivam <manivannan.sadhasivam@linaro.org>");
 MODULE_DESCRIPTION("Qualcomm IPC-Router MHI interface driver");
