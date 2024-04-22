@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 /* Copyright (c) 2020-2021, The Linux Foundation. All rights reserved. */
-/* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved. */
+/* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved. */
 
 #include <asm/byteorder.h>
 #include <linux/device.h>
@@ -434,7 +434,7 @@ static void decode_ras_msg(struct qaic_device *qdev, struct ras_data *msg)
 			   sysbus2_syndrome->lsb3,
 			   sysbus2_syndrome->msb3);
 		break;
-        case NSP_MEM:
+	case NSP_MEM:
 		pci_printk(level, qdev->pdev, "RAS event.\nClass:%s\nDescription:%s %s %s\nSyndrome:\n    NSP ID %d\n    0x%x\n    0x%x\n    0x%x\n    0x%x\n    0x%x\n    0x%x\n    0x%x\n    0x%x\n",
 			   err_class_str[msg->err_type],
 			   err_type_str[msg->err_type],
@@ -450,7 +450,7 @@ static void decode_ras_msg(struct qaic_device *qdev, struct ras_data *msg)
 			   nsp_syndrome->error_address[6],
 			   nsp_syndrome->error_address[7]);
 		break;
-        case TSENS:
+	case TSENS:
 		if (tsens_syndrome->threshold_type >= NUM_TEMP_LVL) {
 			pci_warn(qdev->pdev, "Dropping RAS message with invalid temp threshold %d\n", tsens_syndrome->threshold_type);
 			break;

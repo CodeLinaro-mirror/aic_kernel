@@ -1394,7 +1394,7 @@ static int qaic_manage(struct qaic_device *qdev, struct qaic_user *usr, struct m
 	INIT_LIST_HEAD(&resources.dma_xfers);
 
 	if (user_msg->len > QAIC_MANAGE_MAX_MSG_LENGTH ||
-	    user_msg->count > QAIC_MANAGE_MAX_MSG_LENGTH / sizeof(struct qaic_manage_trans_hdr)){
+	    user_msg->count > QAIC_MANAGE_MAX_MSG_LENGTH / sizeof(struct qaic_manage_trans_hdr)) {
 		trace_qaic_manage_3(qdev->qddev, "User message len is %llu(max: %llu) and count %llu.",
 				    user_msg->len, QAIC_MANAGE_MAX_MSG_LENGTH, user_msg->count);
 		return -EINVAL;

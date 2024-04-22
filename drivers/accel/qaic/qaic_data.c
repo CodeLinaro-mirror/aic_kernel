@@ -510,7 +510,7 @@ static int qaic_validate_req(struct qaic_device *qdev, struct qaic_attach_slice_
 		      invalid_sem(&slice_ent[i].sem2) || invalid_sem(&slice_ent[i].sem3)) {
 			trace_qaic_attach_slice_bo(qdev->qddev, "Invalid slice config.", -EINVAL);
 			return -EINVAL;
-		      }
+		}
 
 		if (slice_ent[i].offset + slice_ent[i].size > total_size) {
 			trace_qaic_attach_slice_bo_3(qdev->qddev, "Invalid slice size or offset. BO size=%llu slice size=%llu and offset=%llu.",
