@@ -737,11 +737,28 @@ EXPORT_SYMBOL_GPL(qrtr_ns_init);
 
 void qrtr_ns_remove(void)
 {
-	cancel_work_sync(&qrtr_ns.work);
-	destroy_workqueue(qrtr_ns.workqueue);
-	sock_release(qrtr_ns.sock);
+	static bool removed;
+
+	if (!removed) {
+		cancel_work_sync(&qrtr_ns.work);
+		destroy_workqueue(qrtr_ns.workqueue);
+		sock_release(qrtr_ns.sock);
+		removed = true;
+	}
 }
 EXPORT_SYMBOL_GPL(qrtr_ns_remove);
+
+static int force_remove_set(const char *buf, const struct kernel_param *kp)
+{
+	qrtr_ns_remove();
+
+	return 0;
+}
+
+static const struct kernel_param_ops force_remove_ops = {
+	.set = force_remove_set,
+};
+module_param_cb(force_remove, &force_remove_ops, NULL, 0200);
 
 MODULE_AUTHOR("Manivannan Sadhasivam <manivannan.sadhasivam@linaro.org>");
 MODULE_DESCRIPTION("Qualcomm IPC Router Nameservice");
