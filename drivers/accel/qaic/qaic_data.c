@@ -2122,10 +2122,12 @@ void qaic_data_get_fifo_info(struct dma_bridge_chan *dbc, u32 *head, u32 *tail)
 	*tail = readl(dbc->dbc_base + REQTP_OFF);
 }
 
-/**
- * dbc_enter_ssr - Prepare to enter in sub system reset(SSR) for given DBC ID
- * During SSR we cannot support execute ioctl and wait ioctl for the given DBC.
- * We control this behaviour using ssr_dbc flag in qdev.
+/*
+ * dbc_enter_ssr - Prepare to enter in sub system reset(SSR) for given DBC ID.
+ *		   The device will automatically deactivate the workload as not
+ *		   all errors can be silently recovered. The user will be
+ *		   notified and will need to decide the required recovery
+ *		   action to take.
  * @qdev: Qranium device handle
  * @dbc_id: ID of the DBC which will enter SSR
  */
@@ -2134,13 +2136,11 @@ void dbc_enter_ssr(struct qaic_device *qdev, u32 dbc_id)
 	struct dma_bridge_chan *dbc = &qdev->dbc[dbc_id];
 
 	qdev->ssr_dbc = dbc_id;
-	sync_empty_xfer_list(qdev, dbc);
+	release_dbc(qdev, dbc_id);
 }
 
-/**
+/*
  * dbc_exit_ssr - Prepare to exit from sub system reset(SSR) for given DBC ID
- * After SSR we exit SSR we can resume our supporting execute ioctl and
- * wait ioctl. We control this behaviour using ssr_dbc flag in qdev.
  * @qdev: Qranium device handle
  */
 void dbc_exit_ssr(struct qaic_device *qdev)
