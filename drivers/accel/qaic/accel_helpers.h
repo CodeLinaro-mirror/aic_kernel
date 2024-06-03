@@ -25,6 +25,7 @@
 #include "qaic.h"
 
 #ifdef _QBP_NEED_DRM_ACCEL_FRAMEWORK
+#define ACCEL_HELPER_CLASS_NAME "accel"
 #define ACCEL_MAJOR		261
 #define ACCEL_MAX_MINORS	256
 
@@ -1097,7 +1098,7 @@ accel_fail:
 
 static int accel_sysfs_init(void)
 {
-	accel_class = class_create(THIS_MODULE, "accel");
+	accel_class = class_create(ACCEL_HELPER_CLASS_NAME);
 	if (IS_ERR(accel_class))
 		return PTR_ERR(accel_class);
 
@@ -1126,9 +1127,9 @@ static int accel_init(void)
 		goto error;
 	}
 
-	accel_debugfs_root = debugfs_create_dir("accel", NULL);
+	accel_debugfs_root = debugfs_create_dir(ACCEL_HELPER_CLASS_NAME, NULL);
 
-	ret = register_chrdev(ACCEL_MAJOR, "accel", &accel_stub_fops);
+	ret = register_chrdev(ACCEL_MAJOR, ACCEL_HELPER_CLASS_NAME, &accel_stub_fops);
 	if (ret < 0) {
 		DRM_ERROR("Cannot register ACCEL major: %d\n", ret);
 		goto error;
@@ -1143,7 +1144,7 @@ error:
 
 static void accel_exit(void)
 {
-	unregister_chrdev(ACCEL_MAJOR, "accel");
+	unregister_chrdev(ACCEL_MAJOR, ACCEL_HELPER_CLASS_NAME);
 	debugfs_remove(accel_debugfs_root);
 	accel_sysfs_destroy();
 	idr_destroy(&accel_minors_idr);
