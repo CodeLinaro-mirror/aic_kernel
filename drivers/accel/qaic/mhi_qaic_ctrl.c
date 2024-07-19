@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved. */
+/* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved. */
 
 #include <linux/kernel.h>
 #include <linux/mhi.h>
@@ -13,7 +13,7 @@
 #include "qaic.h"
 
 #define MHI_QAIC_CTRL_DRIVER_NAME	"mhi_qaic_ctrl"
-#define MHI_QAIC_CTRL_MAX_MINORS	128
+#define MHI_QAIC_CTRL_MAX_MINORS	256
 #define MHI_MAX_MTU			0xffff
 static DEFINE_XARRAY_ALLOC(mqc_xa);
 static struct class *mqc_dev_class;
