@@ -16,6 +16,10 @@
 #include <linux/io-64-nonatomic-lo-hi.h>
 #include <linux/nospec.h>
 
+#ifndef stream_open
+#define stream_open(x, y) nonseekable_open(x, y)
+#endif
+
 MODULE_DESCRIPTION("Microsemi Switchtec(tm) PCIe Management Driver");
 MODULE_VERSION("0.2");
 MODULE_LICENSE("GPL");
