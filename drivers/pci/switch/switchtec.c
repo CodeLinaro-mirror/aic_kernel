@@ -17,7 +17,7 @@
 #include <linux/nospec.h>
 
 MODULE_DESCRIPTION("Microsemi Switchtec(tm) PCIe Management Driver");
-MODULE_VERSION("0.1");
+MODULE_VERSION("0.2");
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Microsemi Corporation");
 
