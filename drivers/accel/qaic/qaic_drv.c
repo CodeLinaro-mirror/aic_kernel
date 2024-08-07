@@ -46,6 +46,12 @@ MODULE_IMPORT_NS(DMA_BUF);
 #define CNTL_MAJOR			5
 #define CNTL_MINOR			0
 
+#define AIC_DEFAULT_DBC_COUNT		16
+#define AIC080_DBC_COUNT		AIC_DEFAULT_DBC_COUNT
+#define AIC100_DBC_COUNT		AIC_DEFAULT_DBC_COUNT
+#define AIC200PF_DBC_COUNT		AIC_DEFAULT_DBC_COUNT
+#define AIC200VF_DBC_COUNT		AIC_DEFAULT_DBC_COUNT
+
 bool datapath_polling;
 module_param(datapath_polling, bool, 0400);
 MODULE_PARM_DESC(datapath_polling, "Operate the datapath in polling mode");
@@ -381,13 +387,10 @@ static struct qaic_device *create_qdev(struct pci_dev *pdev, const struct pci_de
 		return NULL;
 
 	qdev->dev_state = QAIC_OFFLINE;
-	if (id->device == PCI_DEV_AIC080 || id->device == PCI_DEV_AIC100 ||
-	    id->device == PCI_DEV_AIC200PF || id->device == PCI_DEV_AIC200VF) {
-		qdev->num_dbc = 16;
-		qdev->dbc = devm_kcalloc(dev, qdev->num_dbc, sizeof(*qdev->dbc), GFP_KERNEL);
-		if (!qdev->dbc)
-			return NULL;
-	}
+	qdev->num_dbc = id->driver_data;
+	qdev->dbc = devm_kcalloc(dev, qdev->num_dbc, sizeof(*qdev->dbc), GFP_KERNEL);
+	if (!qdev->dbc)
+		return NULL;
 
 	qddev = devm_drm_dev_alloc(&pdev->dev, &qaic_accel_driver, struct qaic_drm_device, drm);
 	if (IS_ERR(qddev))
@@ -643,10 +646,10 @@ static struct mhi_driver qaic_mhi_driver = {
 };
 
 static const struct pci_device_id qaic_ids[] = {
-	{ PCI_DEVICE(PCI_VENDOR_ID_QCOM, PCI_DEV_AIC080), },
-	{ PCI_DEVICE(PCI_VENDOR_ID_QCOM, PCI_DEV_AIC100), },
-	{ PCI_DEVICE(PCI_VENDOR_ID_QCOM, PCI_DEV_AIC200PF), },
-	{ PCI_DEVICE(PCI_VENDOR_ID_QCOM, PCI_DEV_AIC200VF), },
+	{ PCI_DEVICE(PCI_VENDOR_ID_QCOM, PCI_DEV_AIC080), .driver_data = AIC080_DBC_COUNT, },
+	{ PCI_DEVICE(PCI_VENDOR_ID_QCOM, PCI_DEV_AIC100), .driver_data = AIC100_DBC_COUNT, },
+	{ PCI_DEVICE(PCI_VENDOR_ID_QCOM, PCI_DEV_AIC200PF), .driver_data = AIC200PF_DBC_COUNT, },
+	{ PCI_DEVICE(PCI_VENDOR_ID_QCOM, PCI_DEV_AIC200VF), .driver_data = AIC200VF_DBC_COUNT, },
 	{ }
 };
 MODULE_DEVICE_TABLE(pci, qaic_ids);
