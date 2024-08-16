@@ -137,10 +137,10 @@ struct qaic_device {
 	struct pci_dev		*pdev;
 	/* Req. ID of request that will be queued next in MHI control device */
 	u32			next_seq_num;
-	/* Base address of bar 0 */
-	void __iomem		*bar_0;
-	/* Base address of bar 2 */
-	void __iomem		*bar_2;
+	/* Base address of the MHI bar */
+	void __iomem		*bar_mhi;
+	/* Base address of the DBCs bar */
+	void __iomem		*bar_dbc;
 	/* Controller structure for MHI devices */
 	struct mhi_controller	*mhi_cntrl;
 	/* MHI control channel device */
