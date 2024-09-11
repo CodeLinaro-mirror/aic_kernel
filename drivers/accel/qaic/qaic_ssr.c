@@ -168,7 +168,11 @@ struct ssr_crashdump {
 	u8 data[];
 };
 
+#define QAIC_SSR_DUMP_V1_MAGIC 0x1234567890abcdef
+#define QAIC_SSR_DUMP_V1_VER   1
 struct dump_file_meta {
+	u64 magic;
+	u64 version;
 	u64 size;		/* Total size of the entire dump */
 	u64 tbl_len;		/* Length of the table in byte */
 };
@@ -251,6 +255,8 @@ static int alloc_dump(struct ssr_dump_info *dump_info)
 
 	/* Copy crashdump meta and table */
 	dump_meta = dump_info->dump_addr;
+	dump_meta->magic = QAIC_SSR_DUMP_V1_MAGIC;
+	dump_meta->version = QAIC_SSR_DUMP_V1_VER;
 	dump_meta->size = dump_info->dump_sz;
 	dump_meta->tbl_len = dump_info->tbl_len;
 	memcpy(dump_info->dump_addr + sizeof(*dump_meta), dump_info->tbl_addr, dump_info->tbl_len);
