@@ -262,6 +262,15 @@ static inline size_t __must_check size_add(size_t addend1, size_t addend2)
 
 	return bytes;
 }
+static inline size_t __must_check size_mul(size_t factor1, size_t factor2)
+{
+	size_t bytes;
+
+	if (check_mul_overflow(factor1, factor2, &bytes))
+		return SIZE_MAX;
+
+	return bytes;
+}
 #endif
 
 #ifdef _QBP_NEED_DMA_SYNC_SGTABLE
