@@ -252,7 +252,7 @@ static inline void timer_setup(struct timer_list *timer,
 #endif /* COMPILER_HAS_GENERIC_BUILTIN_OVERFLOW */
 #endif /* end _QBP_HAS_CHECK_OVERFLOW */
 
-#ifdef _QBP_NEED_OVERFLOW_SIZE_ADD
+#ifdef _QBP_NEED_OVERFLOW_CHECKED_OPS
 static inline size_t __must_check size_add(size_t addend1, size_t addend2)
 {
 	size_t bytes;
