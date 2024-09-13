@@ -271,7 +271,7 @@ static inline size_t __must_check size_mul(size_t factor1, size_t factor2)
 
 	return bytes;
 }
-#endif
+#endif /* end _QBP_NEED_OVERFLOW_CHECKED_OPS */
 
 #ifdef _QBP_NEED_DMA_SYNC_SGTABLE
 static inline int dma_map_sgtable(struct device *dev, struct sg_table *sgt,
