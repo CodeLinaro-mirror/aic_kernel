@@ -537,44 +537,146 @@ static void qaic_free_sgt(struct sg_table *sgt)
 	kfree(sgt);
 }
 
-static void qaic_gem_print_info(struct drm_printer *p, unsigned int indent,
-				const struct drm_gem_object *obj)
+static void qaic_init_bo(struct qaic_bo *bo, bool reinit)
 {
-	struct qaic_bo *bo = to_qaic_bo(obj);
-
-	drm_printf_indent(p, indent, "BO DMA direction %d\n", bo->dir);
+	if (reinit) {
+		bo->sliced = false;
+		reinit_completion(&bo->xfer_done);
+	} else {
+		mutex_init(&bo->lock);
+		init_completion(&bo->xfer_done);
+	}
+	complete_all(&bo->xfer_done);
+	INIT_LIST_HEAD(&bo->slices);
+	INIT_LIST_HEAD(&bo->xfer_list);
 }
 
-static const struct vm_operations_struct drm_vm_ops = {
-	.open = drm_gem_vm_open,
-	.close = drm_gem_vm_close,
-};
-
-static int qaic_gem_object_mmap(struct drm_gem_object *obj, struct vm_area_struct *vma)
+static struct qaic_bo *qaic_alloc_init_bo(void)
 {
-	struct qaic_bo *bo = to_qaic_bo(obj);
-	unsigned long offset = 0;
-	struct scatterlist *sg;
-	int ret = 0;
+	struct qaic_bo *bo;
 
-	if (obj->import_attach) {
-		trace_qaic_mmap(to_qaic_drm_device(obj->dev), "mmap() called for BO derived out of DMABUF.",
-				-EINVAL);
-		return -EINVAL;
+	bo = kzalloc(sizeof(*bo), GFP_KERNEL);
+	if (!bo)
+		return ERR_PTR(-ENOMEM);
+
+	qaic_init_bo(bo, false);
+
+	return bo;
+}
+
+static int qaic_prepare_import_bo(struct qaic_bo *bo, struct qaic_attach_slice_hdr *hdr)
+{
+	struct drm_gem_object *obj = &bo->base;
+	struct sg_table *sgt;
+	int ret;
+
+	sgt = dma_buf_map_attachment(obj->import_attach, hdr->dir);
+	if (IS_ERR(sgt)) {
+		ret = PTR_ERR(sgt);
+		trace_qaic_attach_slice_bo(NULL, "Failed dma_buf_map_attachment().", ret);
+		return ret;
 	}
 
-	for (sg = bo->sgt->sgl; sg; sg = sg_next(sg)) {
-		if (sg_page(sg)) {
-			ret = remap_pfn_range(vma, vma->vm_start + offset, page_to_pfn(sg_page(sg)),
-					      sg->length, vma->vm_page_prot);
-			if (ret)
-				goto out;
-			offset += sg->length;
+	bo->sgt = sgt;
+
+	return 0;
+}
+
+static int qaic_prepare_export_bo(struct qaic_device *qdev, struct qaic_bo *bo,
+				  struct qaic_attach_slice_hdr *hdr)
+{
+	int ret;
+
+	ret = dma_map_sgtable(&qdev->pdev->dev, bo->sgt, hdr->dir, 0);
+	if (ret) {
+		trace_qaic_attach_slice_bo(NULL, "Failed dma_map_sgtable().", ret);
+		return -EFAULT;
+	}
+
+	return 0;
+}
+
+static int qaic_prepare_bo(struct qaic_device *qdev, struct qaic_bo *bo,
+			   struct qaic_attach_slice_hdr *hdr)
+{
+	int ret;
+
+	if (bo->base.import_attach)
+		ret = qaic_prepare_import_bo(bo, hdr);
+	else
+		ret = qaic_prepare_export_bo(qdev, bo, hdr);
+	bo->dir = hdr->dir;
+	bo->dbc = &qdev->dbc[hdr->dbc_id];
+	bo->nr_slice = hdr->count;
+
+	return ret;
+}
+
+static void qaic_unprepare_import_bo(struct qaic_bo *bo)
+{
+	dma_buf_unmap_attachment(bo->base.import_attach, bo->sgt, bo->dir);
+	bo->sgt = NULL;
+}
+
+static void qaic_unprepare_export_bo(struct qaic_device *qdev, struct qaic_bo *bo)
+{
+	dma_unmap_sgtable(&qdev->pdev->dev, bo->sgt, bo->dir, 0);
+}
+
+static void qaic_unprepare_bo(struct qaic_device *qdev, struct qaic_bo *bo)
+{
+	if (bo->base.import_attach)
+		qaic_unprepare_import_bo(bo);
+	else
+		qaic_unprepare_export_bo(qdev, bo);
+
+	bo->dir = 0;
+	bo->dbc = NULL;
+	bo->nr_slice = 0;
+}
+
+static void qaic_free_slices_bo(struct qaic_bo *bo)
+{
+	struct bo_slice *slice, *temp;
+
+	list_for_each_entry_safe(slice, temp, &bo->slices, slice)
+		kref_put(&slice->ref_count, free_slice);
+	if (WARN_ON_ONCE(bo->total_slice_nents != 0))
+		bo->total_slice_nents = 0;
+	bo->nr_slice = 0;
+}
+
+static int qaic_attach_slicing_bo(struct qaic_device *qdev, struct qaic_bo *bo,
+				  struct qaic_attach_slice_hdr *hdr,
+				  struct qaic_attach_slice_entry *slice_ent)
+{
+	int ret, i;
+
+	for (i = 0; i < hdr->count; i++) {
+		ret = qaic_map_one_slice(qdev, bo, &slice_ent[i]);
+		if (ret) {
+			qaic_free_slices_bo(bo);
+			return ret;
 		}
 	}
 
-out:
-	return ret;
+	if (bo->total_slice_nents > bo->dbc->nelem) {
+		qaic_free_slices_bo(bo);
+		trace_qaic_attach_slice_bo_2(NULL, "Too many requests for DBC queue. Queue size %llu total req for this BO %llu.",
+					     bo->dbc->nelem, bo->total_slice_nents);
+		return -ENOSPC;
+	}
+
+	return 0;
+}
+
+static void detach_slice_bo(struct qaic_device *qdev, struct qaic_bo *bo)
+{
+	qaic_free_slices_bo(bo);
+	qaic_unprepare_bo(qdev, bo);
+	qaic_init_bo(bo, true);
+	list_del(&bo->bo_list);
+	drm_gem_object_put(&bo->base);
 }
 
 static void qaic_free_object(struct drm_gem_object *obj)
@@ -592,6 +694,14 @@ static void qaic_free_object(struct drm_gem_object *obj)
 	mutex_destroy(&bo->lock);
 	drm_gem_object_release(obj);
 	kfree(bo);
+}
+
+static void qaic_gem_print_info(struct drm_printer *p, unsigned int indent,
+				const struct drm_gem_object *obj)
+{
+	struct qaic_bo *bo = to_qaic_bo(obj);
+
+	drm_printf_indent(p, indent, "BO DMA direction %d\n", bo->dir);
 }
 
 static struct sg_table *qaic_get_sg_table(struct drm_gem_object *obj)
@@ -621,6 +731,38 @@ static struct sg_table *qaic_get_sg_table(struct drm_gem_object *obj)
 	return sgt;
 }
 
+static int qaic_gem_object_mmap(struct drm_gem_object *obj, struct vm_area_struct *vma)
+{
+	struct qaic_bo *bo = to_qaic_bo(obj);
+	unsigned long offset = 0;
+	struct scatterlist *sg;
+	int ret = 0;
+
+	if (obj->import_attach) {
+		trace_qaic_mmap(to_qaic_drm_device(obj->dev), "mmap() called for BO derived out of DMABUF.",
+				-EINVAL);
+		return -EINVAL;
+	}
+
+	for (sg = bo->sgt->sgl; sg; sg = sg_next(sg)) {
+		if (sg_page(sg)) {
+			ret = remap_pfn_range(vma, vma->vm_start + offset, page_to_pfn(sg_page(sg)),
+					      sg->length, vma->vm_page_prot);
+			if (ret)
+				goto out;
+			offset += sg->length;
+		}
+	}
+
+out:
+	return ret;
+}
+
+static const struct vm_operations_struct drm_vm_ops = {
+	.open = drm_gem_vm_open,
+	.close = drm_gem_vm_close,
+};
+
 static const struct drm_gem_object_funcs qaic_gem_funcs = {
 	.free = qaic_free_object,
 	.get_sg_table = qaic_get_sg_table,
@@ -628,33 +770,6 @@ static const struct drm_gem_object_funcs qaic_gem_funcs = {
 	.mmap = qaic_gem_object_mmap,
 	.vm_ops = &drm_vm_ops,
 };
-
-static void qaic_init_bo(struct qaic_bo *bo, bool reinit)
-{
-	if (reinit) {
-		bo->sliced = false;
-		reinit_completion(&bo->xfer_done);
-	} else {
-		mutex_init(&bo->lock);
-		init_completion(&bo->xfer_done);
-	}
-	complete_all(&bo->xfer_done);
-	INIT_LIST_HEAD(&bo->slices);
-	INIT_LIST_HEAD(&bo->xfer_list);
-}
-
-static struct qaic_bo *qaic_alloc_init_bo(void)
-{
-	struct qaic_bo *bo;
-
-	bo = kzalloc(sizeof(*bo), GFP_KERNEL);
-	if (!bo)
-		return ERR_PTR(-ENOMEM);
-
-	qaic_init_bo(bo, false);
-
-	return bo;
-}
 
 int qaic_create_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *file_priv)
 {
@@ -830,112 +945,6 @@ attach_fail:
 	kfree(bo);
 out:
 	return ERR_PTR(ret);
-}
-
-static int qaic_prepare_import_bo(struct qaic_bo *bo, struct qaic_attach_slice_hdr *hdr)
-{
-	struct drm_gem_object *obj = &bo->base;
-	struct sg_table *sgt;
-	int ret;
-
-	sgt = dma_buf_map_attachment(obj->import_attach, hdr->dir);
-	if (IS_ERR(sgt)) {
-		ret = PTR_ERR(sgt);
-		trace_qaic_attach_slice_bo(NULL, "Failed dma_buf_map_attachment().", ret);
-		return ret;
-	}
-
-	bo->sgt = sgt;
-
-	return 0;
-}
-
-static int qaic_prepare_export_bo(struct qaic_device *qdev, struct qaic_bo *bo,
-				  struct qaic_attach_slice_hdr *hdr)
-{
-	int ret;
-
-	ret = dma_map_sgtable(&qdev->pdev->dev, bo->sgt, hdr->dir, 0);
-	if (ret) {
-		trace_qaic_attach_slice_bo(NULL, "Failed dma_map_sgtable().", ret);
-		return -EFAULT;
-	}
-
-	return 0;
-}
-
-static int qaic_prepare_bo(struct qaic_device *qdev, struct qaic_bo *bo,
-			   struct qaic_attach_slice_hdr *hdr)
-{
-	int ret;
-
-	if (bo->base.import_attach)
-		ret = qaic_prepare_import_bo(bo, hdr);
-	else
-		ret = qaic_prepare_export_bo(qdev, bo, hdr);
-	bo->dir = hdr->dir;
-	bo->dbc = &qdev->dbc[hdr->dbc_id];
-	bo->nr_slice = hdr->count;
-
-	return ret;
-}
-
-static void qaic_unprepare_import_bo(struct qaic_bo *bo)
-{
-	dma_buf_unmap_attachment(bo->base.import_attach, bo->sgt, bo->dir);
-	bo->sgt = NULL;
-}
-
-static void qaic_unprepare_export_bo(struct qaic_device *qdev, struct qaic_bo *bo)
-{
-	dma_unmap_sgtable(&qdev->pdev->dev, bo->sgt, bo->dir, 0);
-}
-
-static void qaic_unprepare_bo(struct qaic_device *qdev, struct qaic_bo *bo)
-{
-	if (bo->base.import_attach)
-		qaic_unprepare_import_bo(bo);
-	else
-		qaic_unprepare_export_bo(qdev, bo);
-
-	bo->dir = 0;
-	bo->dbc = NULL;
-	bo->nr_slice = 0;
-}
-
-static void qaic_free_slices_bo(struct qaic_bo *bo)
-{
-	struct bo_slice *slice, *temp;
-
-	list_for_each_entry_safe(slice, temp, &bo->slices, slice)
-		kref_put(&slice->ref_count, free_slice);
-	if (WARN_ON_ONCE(bo->total_slice_nents != 0))
-		bo->total_slice_nents = 0;
-	bo->nr_slice = 0;
-}
-
-static int qaic_attach_slicing_bo(struct qaic_device *qdev, struct qaic_bo *bo,
-				  struct qaic_attach_slice_hdr *hdr,
-				  struct qaic_attach_slice_entry *slice_ent)
-{
-	int ret, i;
-
-	for (i = 0; i < hdr->count; i++) {
-		ret = qaic_map_one_slice(qdev, bo, &slice_ent[i]);
-		if (ret) {
-			qaic_free_slices_bo(bo);
-			return ret;
-		}
-	}
-
-	if (bo->total_slice_nents > bo->dbc->nelem) {
-		qaic_free_slices_bo(bo);
-		trace_qaic_attach_slice_bo_2(NULL, "Too many requests for DBC queue. Queue size %llu total req for this BO %llu.",
-					     bo->dbc->nelem, bo->total_slice_nents);
-		return -ENOSPC;
-	}
-
-	return 0;
 }
 
 int qaic_attach_slice_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *file_priv)
@@ -1920,15 +1929,6 @@ unlock_dev_srcu:
 unlock_usr_srcu:
 	srcu_read_unlock(&usr->qddev_lock, usr_rcu_id);
 	return ret;
-}
-
-static void detach_slice_bo(struct qaic_device *qdev, struct qaic_bo *bo)
-{
-	qaic_free_slices_bo(bo);
-	qaic_unprepare_bo(qdev, bo);
-	qaic_init_bo(bo, true);
-	list_del(&bo->bo_list);
-	drm_gem_object_put(&bo->base);
 }
 
 int qaic_detach_slice_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *file_priv)
