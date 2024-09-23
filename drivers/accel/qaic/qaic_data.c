@@ -765,8 +765,8 @@ static const struct vm_operations_struct drm_vm_ops = {
 
 static const struct drm_gem_object_funcs qaic_gem_funcs = {
 	.free = qaic_free_object,
-	.get_sg_table = qaic_get_sg_table,
 	.print_info = qaic_gem_print_info,
+	.get_sg_table = qaic_get_sg_table,
 	.mmap = qaic_gem_object_mmap,
 	.vm_ops = &drm_vm_ops,
 };
